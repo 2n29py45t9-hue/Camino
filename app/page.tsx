@@ -1,592 +1,887 @@
+
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
-import type { Session } from "@supabase/supabase-js";
-import {
-  getSupabaseBrowserClient,
-  isSupabaseConfigured,
-} from "@/lib/supabase/client";
+import { createClient } from "@supabase/supabase-js";
+import { useCallback, useEffect, useState } from "react";
 
-type AuthMode = "signup" | "login";
+// Verbindet sich mit deiner Camino-Datenbank (RLS schützt alle Daten).
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-const answers = ["Buenas noches", "Buenos días", "Hasta luego"];
+/* ---------------- Typen ---------------- */
 
-function CaminoMark() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="brand-mark"
-      fill="none"
-      viewBox="0 0 44 44"
-    >
-      <rect fill="currentColor" height="44" rx="15" width="44" />
-      <path
-        d="M13 27.5c3.2-7.2 7.4-11 12.5-11 2.7 0 4.8 1.1 6.5 3.4M15 30.5c4.2-2.1 8.1-2.6 11.7-1.5 2 .6 3.7 1.6 5.3 3"
-        stroke="#FBF8F0"
-        strokeLinecap="round"
-        strokeWidth="2.4"
-      />
-      <circle cx="15" cy="16" fill="#E8A275" r="2.2" />
-    </svg>
-  );
-}
+type Unit = {
+  id: string;
+  order_index: number;
+  title_es: string;
+  title_de: string;
+  icon: string | null;
+  lessons: Lesson[];
+};
 
-function ArrowIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
-      <path
-        d="M4 10h11m-4-4 4 4-4 4"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.7"
-      />
-    </svg>
-  );
-}
+type Lesson = {
+  id: string;
+  unit_id: string;
+  order_index: number;
+  title_es: string;
+  title_de: string;
+  lesson_type: string;
+  xp_reward: number;
+};
 
-function CloseIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
-      <path
-        d="m5 5 10 10M15 5 5 15"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.7"
-      />
-    </svg>
-  );
-}
+type Exercise = {
+  id: string;
+  order_index: number;
+  exercise_type: string;
+  prompt: any;
+  solution: any;
+};
 
-function BookIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
-      <path
-        d="M4.5 5.5c2.7-.8 5.2-.4 7.5 1.2v12c-2.3-1.6-4.8-2-7.5-1.2v-12Zm15 0c-2.7-.8-5.2-.4-7.5 1.2v12c2.3-1.6 4.8-2 7.5-1.2v-12Z"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-      />
-    </svg>
-  );
-}
+type Profile = {
+  id: string;
+  display_name: string | null;
+  total_xp: number;
+  streak_count: number;
+  streak_last_active: string | null;
+  daily_goal_minutes: number;
+  learning_goal: string | null;
+  cefr_level: string;
+};
 
-export default function Home() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [authLoading, setAuthLoading] = useState(() => isSupabaseConfigured());
-  const [authOpen, setAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<AuthMode>("signup");
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [authMessage, setAuthMessage] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [lessonOpen, setLessonOpen] = useState(false);
-  const [answer, setAnswer] = useState<string | null>(null);
+/* ---------------- App ---------------- */
 
-  useEffect(() => {
-    if (!isSupabaseConfigured()) return;
+export default function CaminoApp() {
+  const [ready, setReady] = useState(false);
+  const [session, setSession] = useState<any>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [completedLessonIds, setCompletedLessonIds] = useState<Set<string>>(new Set());
+  const [dueCount, setDueCount] = useState(0);
+  const [view, setView] = useState<{ name: "path" } | { name: "lesson"; lesson: Lesson } | { name: "review" } | { name: "profile" } | { name: "mywords" }>({ name: "path" });
+  const [loading, setLoading] = useState(true);
 
-    const supabase = getSupabaseBrowserClient();
-    let isMounted = true;
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!isMounted) return;
-      setSession(nextSession);
-      if (nextSession) {
-        setAuthOpen(false);
-        setAuthError("");
-      }
-      setAuthLoading(false);
-    });
-
-    void supabase.auth
-      .getSession()
-      .then(({ data, error }) => {
-        if (!isMounted) return;
-        if (error) setAuthError(error.message);
-        setSession(data.session);
-        setAuthLoading(false);
-      })
-      .catch(() => {
-        if (isMounted) setAuthLoading(false);
-      });
-
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-    };
+  const loadAll = useCallback(async (uid: string) => {
+    const [u, lc, p, srs] = await Promise.all([
+      supabase.from("units").select("*, lessons(*)").order("order_index"),
+      supabase.from("lesson_completions").select("lesson_id").eq("profile_id", uid),
+      supabase.from("profiles").select("*").eq("id", uid).single(),
+      supabase.from("srs_cards").select("id").eq("profile_id", uid).lte("due_at", new Date().toISOString()),
+    ]);
+    if (u.data) {
+      setUnits((u.data as any[]).map((x) => ({ ...x, lessons: (x.lessons as any[]).sort((a, b) => a.order_index - b.order_index) })));
+    }
+    if (lc.data) setCompletedLessonIds(new Set(lc.data.map((r: any) => r.lesson_id)));
+    if (p.data) setProfile(p.data as Profile);
+    setDueCount(srs.data?.length ?? 0);
+    setLoading(false);
   }, []);
 
-  const learnerName =
-    session?.user.user_metadata?.display_name ||
-    session?.user.email?.split("@")[0] ||
-    "Lernende:r";
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      if (data.session?.user) loadAll(data.session.user.id);
+      else setLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s);
+      if (s?.user) loadAll(s.user.id);
+      else setLoading(false);
+    });
+    setReady(true);
+    return () => sub.subscription.unsubscribe();
+  }, [loadAll]);
 
-  function openAuth(mode: AuthMode = "signup") {
-    setAuthMode(mode);
-    setAuthError("");
-    setAuthMessage("");
-    setAuthOpen(true);
+  if (loading || !ready) {
+    return <main className="min-h-screen flex items-center justify-center text-2xl">🌱 camino lädt …</main>;
   }
 
-  function startLesson() {
-    if (!session) {
-      openAuth("signup");
-      return;
-    }
-    setAnswer(null);
-    setLessonOpen(true);
+  if (!session) return <AuthScreen onDone={() => setLoading(true)} />;
+
+  // Erste Anmeldung: Lernziel auswählen, bevor der Lernpfad startet.
+  if (profile && profile.learning_goal == null) {
+    return <OnboardingScreen profile={profile} onDone={() => loadAll(session.user.id)} />;
   }
 
-  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setAuthError("");
-    setAuthMessage("");
-
-    if (!isSupabaseConfigured()) {
-      setAuthError(
-        "Die Supabase-Variablen fehlen. Bitte NEXT_PUBLIC_SUPABASE_URL und NEXT_PUBLIC_SUPABASE_ANON_KEY einrichten.",
-      );
-      return;
-    }
-
-    setAuthBusy(true);
-    try {
-      const supabase = getSupabaseBrowserClient();
-
-      if (authMode === "signup") {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: {
-            data: { display_name: displayName.trim() },
-            emailRedirectTo: window.location.origin,
-          },
-        });
-
-        if (signUpError) throw signUpError;
-
-        if (data.session) {
-          setSession(data.session);
-          setAuthOpen(false);
-        } else {
-          setAuthMessage(
-            "Fast geschafft! Bitte bestätige deine E-Mail-Adresse über den Link in deinem Postfach und melde dich danach an.",
-          );
-        }
-      } else {
-        const { data, error: signInError } =
-          await supabase.auth.signInWithPassword({
-            email: email.trim(),
-            password,
-          });
-
-        if (signInError) throw signInError;
-        setSession(data.session);
-        setAuthOpen(false);
-      }
-    } catch (error) {
-      setAuthError(
-        error instanceof Error
-          ? error.message
-          : "Das hat gerade nicht geklappt. Bitte versuche es noch einmal.",
-      );
-    } finally {
-      setAuthBusy(false);
-    }
+  if (view.name === "profile") {
+    return (
+      <ProfileScreen
+        profile={profile}
+        userId={session.user.id}
+        onBack={() => { loadAll(session.user.id); setView({ name: "path" }); }}
+        onPracticeWords={() => setView({ name: "mywords" })}
+      />
+    );
   }
 
-  async function handleSignOut() {
-    if (!isSupabaseConfigured()) return;
-    const { error } = await getSupabaseBrowserClient().auth.signOut();
-    if (error) setAuthError(error.message);
-    else setSession(null);
+  if (view.name === "mywords") {
+    return <MyWordsScreen userId={session.user.id} onBack={() => setView({ name: "profile" })} />;
   }
 
-  function goToLearningPath() {
-    document.getElementById("lernweg")?.scrollIntoView({ behavior: "smooth" });
+  if (view.name === "lesson") {
+    return (
+      <LessonPlayer
+        lesson={view.lesson}
+        profile={profile}
+        userId={session.user.id}
+        onExit={() => setView({ name: "path" })}
+        onFinished={() => {
+          loadAll(session.user.id);
+          setView({ name: "path" });
+        }}
+      />
+    );
+  }
+
+  if (view.name === "review") {
+    return <ReviewScreen userId={session.user.id} onExit={() => setView({ name: "path" })} />;
   }
 
   return (
-    <main className="site-shell">
-      <header className="site-header">
-        <a aria-label="Camino – Startseite" className="brand" href="#start">
-          <CaminoMark />
-          <span className="brand-wordmark">
-            camino<span>.</span>
-          </span>
-        </a>
-
-        <nav aria-label="Hauptnavigation" className="main-nav">
-          <a href="#lernweg">Dein Lernweg</a>
-          <a href="#idee">So funktioniert’s</a>
-        </nav>
-
-        <div className="header-actions">
-          {session ? (
-            <>
-              <span className="signed-in-label">
-                <span className="status-dot" />
-                {authLoading ? "Lädt …" : learnerName}
-              </span>
-              <button className="button button-quiet" onClick={handleSignOut}>
-                Abmelden
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                className="button button-quiet header-login"
-                onClick={() => openAuth("login")}
-              >
-                Anmelden
-              </button>
-              <button
-                className="button button-small button-primary"
-                onClick={() => openAuth("signup")}
-              >
-                Kostenlos starten <ArrowIcon />
-              </button>
-            </>
-          )}
+    <main className="min-h-screen bg-neutral-50">
+      <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+        <div className="max-w-md mx-auto px-4 py-3 flex items-center justify-between text-sm font-bold">
+          <span className="text-orange-500">🔥 {profile?.streak_count ?? 0}</span>
+          <span className="text-lg font-extrabold text-[#58CC02]">camino</span>
+          <button className="text-xl" title="Profil" onClick={() => setView({ name: "profile" })}>👤</button>
         </div>
       </header>
 
-      <section aria-labelledby="hero-title" className="hero" id="start">
-        <div className="hero-copy">
-          <div className="eyebrow">
-            <span className="eyebrow-spark" aria-hidden="true">✳</span>
-            SPANISCH LERNEN, GANZ IN DEINEM TEMPO
-          </div>
-          <h1 id="hero-title">
-            Dein Weg zu Spanisch beginnt mit <em>hola.</em>
-          </h1>
-          <p className="hero-description">
-            Kurze Lektionen, die in deinen Alltag passen. Ein klarer Lernpfad,
-            der dich Schritt für Schritt zu echten Gesprächen bringt.
-          </p>
-          {session ? (
-            <div className="welcome-note">
-              <span className="welcome-spark" aria-hidden="true">✦</span>
-              Schön, dass du da bist, {learnerName}.
-            </div>
-          ) : null}
-          <div className="hero-buttons">
-            {session ? (
-              <button className="button button-primary" onClick={goToLearningPath}>
-                Weiter zum Lernweg <ArrowIcon />
-              </button>
-            ) : (
-              <button
-                className="button button-primary"
-                onClick={() => openAuth("signup")}
-              >
-                Deinen Weg beginnen <ArrowIcon />
-              </button>
-            )}
-            <a className="text-link" href="#lernweg">
-              Lernweg ansehen <span aria-hidden="true">↓</span>
-            </a>
-          </div>
-          <p className="hero-footnote">Kostenlos starten · kein Abo · dein Tempo</p>
-        </div>
+      <div className="max-w-md mx-auto px-4 py-6">
+        {dueCount > 0 && (
+          <button onClick={() => setView({ name: "review" })}
+            className="w-full mb-5 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 text-left">
+            <div className="font-extrabold text-amber-600">🔁 {dueCount} Wiederholung{dueCount > 1 ? "en" : ""} fällig</div>
+            <div className="text-xs text-gray-500">Camino hat geplant, was du jetzt auffrischen solltest.</div>
+          </button>
+        )}
 
-        <div aria-label="Vorschau einer Camino-Lektion" className="hero-art">
-          <div className="art-sun" />
-          <div className="art-orbit art-orbit-one" />
-          <div className="art-orbit art-orbit-two" />
-          <div className="floating-note note-top">
-            <span className="note-star" aria-hidden="true">✳</span>
-            Kleine Schritte. Große Welt.
-          </div>
-          <div className="lesson-preview-card">
-            <div className="preview-card-top">
-              <span className="lesson-index">01</span>
-              <div>
-                <span className="card-kicker">DEIN ERSTER SCHRITT</span>
-                <strong>Saludos</strong>
+        <PathView
+          units={units}
+          completed={completedLessonIds}
+          onStart={(lesson) => setView({ name: "lesson", lesson })}
+        />
+
+        <div className="mt-6 text-center text-xs text-gray-400">
+          ⚡ {profile?.total_xp ?? 0} XP · Serien-Tag {profile?.streak_last_active ?? "–"}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/* ---------------- Auth ---------------- */
+
+function AuthScreen({ onDone }: { onDone: () => void }) {
+  const [mode, setMode] = useState<"login" | "signup">("signup");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
+
+  async function submit() {
+    setMsg("");
+    const fn = mode === "signup" ? supabase.auth.signUp : supabase.auth.signInWithPassword;
+    const { error } = await fn({ email, password });
+    if (error) { setMsg(error.message); return; }
+    if (mode === "signup") setMsg("Prüfe dein Postfach zur Bestätigung – oder deaktiviere „Confirm email“ im Supabase-Dashboard.");
+    onDone();
+  }
+
+  return (
+    <main className="min-h-screen bg-white flex flex-col items-center justify-center px-8 gap-4">
+      <div className="text-6xl">🌿</div>
+      <h1 className="text-3xl font-extrabold text-[#58CC02]">camino</h1>
+      <p className="text-sm text-gray-400 text-center">Dein Weg zu Spanisch – kostenlos, adaptiv, ohne Paywall.</p>
+      <div className="w-full max-w-sm flex flex-col gap-3 mt-2">
+        <input className="border-2 border-gray-200 rounded-2xl px-4 py-3" type="email" placeholder="E-Mail"
+          value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input className="border-2 border-gray-200 rounded-2xl px-4 py-3" type="password" placeholder="Passwort (min. 6 Zeichen)"
+          value={password} onChange={(e) => setPassword(e.target.value)} />
+        <button className="bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]"
+          onClick={submit}>
+          {mode === "signup" ? "Konto erstellen" : "Einloggen"}
+        </button>
+        <button className="text-sm text-[#1CB0F6] font-bold" onClick={() => setMode(mode === "signup" ? "login" : "signup")}>
+          {mode === "signup" ? "Ich habe schon ein Konto" : "Neu hier? Konto erstellen"}
+        </button>
+        {msg && <div className="text-xs text-gray-500 text-center">{msg}</div>}
+      </div>
+    </main>
+  );
+}
+
+/* ---------------- Lernpfad ---------------- */
+
+function PathView({ units, completed, onStart }: { units: Unit[]; completed: Set<string>; onStart: (l: Lesson) => void }) {
+  const offsets = [0, 40, 72, 40, 0, -40, -72, -40];
+  let nextFound = false;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {units.map((unit) => {
+        const unitLessons = unit.lessons;
+        const unitDone = unitLessons.every((l) => completed.has(l.id));
+        const unlocked = unit.order_index === 1 || units.find((u) => u.order_index === unit.order_index - 1)
+          ?.lessons.every((l) => completed.has(l.id));
+        return (
+          <div key={unit.id}>
+            <div className={`rounded-2xl p-3 mb-2 flex items-center gap-3 ${unlocked ? "bg-[#58CC02]" : "bg-gray-300"}`}>
+              <span className="text-2xl">{unlocked ? (unit.icon ?? "📘") : "🔒"}</span>
+              <div className="text-white flex-1">
+                <div className="font-extrabold">{unit.title_es} <span className="text-xs opacity-70">· A1</span></div>
+                <div className="text-xs opacity-80">{unit.title_de}</div>
               </div>
-              <span aria-label="Lektion" className="preview-book-icon">
-                <BookIcon />
-              </span>
+              {unitDone && <span className="text-white">✓</span>}
             </div>
-            <div className="preview-divider" />
-            <p className="spanish-word">¡Hola!</p>
-            <p className="word-translation">Hallo — schön, dass du da bist.</p>
-            <div className="preview-footer">
-              <span><span className="tiny-dot" /> Begrüßungen</span>
-              <span>Erste Lektion</span>
-            </div>
-          </div>
-          <div className="floating-note note-bottom">
-            <span className="note-check" aria-hidden="true">✓</span>
-            66 Übungen warten auf dich
-          </div>
-          <div aria-hidden="true" className="art-leaf leaf-one" />
-          <div aria-hidden="true" className="art-leaf leaf-two" />
-        </div>
-      </section>
-
-      <section aria-label="Camino auf einen Blick" className="quick-facts">
-        <div className="fact-item">
-          <span className="fact-number">66</span>
-          <span className="fact-text">kurze Übungen</span>
-        </div>
-        <span aria-hidden="true" className="fact-separator" />
-        <div className="fact-item">
-          <span className="fact-icon fact-icon-clock" aria-hidden="true">◷</span>
-          <span className="fact-text">Lernen in deinem Alltag</span>
-        </div>
-        <span aria-hidden="true" className="fact-separator" />
-        <div className="fact-item">
-          <span className="fact-icon fact-icon-heart" aria-hidden="true">♡</span>
-          <span className="fact-text">Ohne Paywall</span>
-        </div>
-      </section>
-
-      <section aria-labelledby="path-title" className="path-section" id="lernweg">
-        <div className="section-heading">
-          <div>
-            <p className="section-eyebrow">TU CAMINO · DEIN LERNWEG</p>
-            <h2 id="path-title">Heute ein Schritt.<br />Bald ein ganzes Gespräch.</h2>
-          </div>
-          <p className="section-description">
-            Fang mit den Worten an, die du sofort gebrauchen kannst. Mit jeder
-            Lektion wächst dein Gefühl für die Sprache.
-          </p>
-        </div>
-
-        <div className="path-card">
-          <div className="path-art-panel">
-            <div aria-hidden="true" className="path-sun" />
-            <span className="path-art-kicker">EMPEZAMOS</span>
-            <span className="path-art-word">¡Hola!</span>
-            <span className="path-art-caption">Alles beginnt mit einem Hallo.</span>
-            <span aria-hidden="true" className="path-path-line" />
-            <span aria-hidden="true" className="path-marker marker-one" />
-            <span aria-hidden="true" className="path-marker marker-two" />
-          </div>
-          <div className="path-card-content">
-            {session ? (
-              <div className="path-account-pill">
-                <span className="status-dot" /> Angemeldet als {learnerName}
-              </div>
-            ) : null}
-            <p className="card-kicker">DEIN STARTPUNKT</p>
-            <h3>Saludos</h3>
-            <p className="path-card-copy">
-              Begrüße andere, frage wie es ihnen geht und verabschiede dich —
-              deine ersten Gespräche beginnen hier.
-            </p>
-            <div className="path-tags">
-              <span>Erste Schritte</span>
-              <span>Alltags-Spanisch</span>
-            </div>
-            <button className="button button-dark" onClick={startLesson}>
-              {session ? "Lektion ansehen" : "Kostenlos anfangen"} <ArrowIcon />
-            </button>
-            <p className="path-card-note">
-              {session
-                ? "Die Lernpfad-Vorschau ist bereit."
-                : "Ein Konto genügt, um deinen Lernpfad zu öffnen."}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section aria-labelledby="idea-title" className="idea-section" id="idee">
-        <div className="idea-copy">
-          <p className="section-eyebrow">WENIGER DRUCK. MEHR SPANISCH.</p>
-          <h2 id="idea-title">Eine Sprache wächst<br />mit jedem kleinen Schritt.</h2>
-        </div>
-        <div className="idea-points">
-          <article className="idea-point">
-            <span className="idea-number">01</span>
-            <div>
-              <h3>Mach es dir leicht.</h3>
-              <p>Ein übersichtlicher Lernpfad hilft dir, einfach anzufangen.</p>
-            </div>
-          </article>
-          <article className="idea-point">
-            <span className="idea-number">02</span>
-            <div>
-              <h3>Komm regelmäßig zurück.</h3>
-              <p>Kurze Einheiten machen aus Lernen eine Gewohnheit.</p>
-            </div>
-          </article>
-          <article className="idea-point">
-            <span className="idea-number">03</span>
-            <div>
-              <h3>Lern für echte Gespräche.</h3>
-              <p>Starte mit den Ausdrücken, die du im Alltag wirklich brauchst.</p>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <footer className="site-footer">
-        <a aria-label="Camino – zurück nach oben" className="brand footer-brand" href="#start">
-          <CaminoMark />
-          <span className="brand-wordmark">camino<span>.</span></span>
-        </a>
-        <p>Dein Weg zu Spanisch. Schritt für Schritt.</p>
-        <span className="footer-language">Hecho con cariño <span aria-hidden="true">♥</span></span>
-      </footer>
-
-      {authOpen ? (
-        <div className="modal-backdrop">
-          <section
-            aria-labelledby="auth-title"
-            aria-modal="true"
-            className="dialog auth-dialog"
-            role="dialog"
-          >
-            <button
-              aria-label="Dialog schließen"
-              className="dialog-close"
-              onClick={() => setAuthOpen(false)}
-              type="button"
-            >
-              <CloseIcon />
-            </button>
-            <div className="dialog-brand"><CaminoMark /></div>
-            <p className="section-eyebrow">DEIN WEG BEGINNT HIER</p>
-            <h2 id="auth-title">
-              {authMode === "signup" ? "Hola, schön dich zu sehen." : "Willkommen zurück."}
-            </h2>
-            <p className="dialog-intro">
-              {authMode === "signup"
-                ? "Erstelle dein kostenloses Konto und mach den ersten Schritt."
-                : "Melde dich an und setze deinen Weg fort."}
-            </p>
-
-            <form className="auth-form" onSubmit={handleAuthSubmit}>
-              {authMode === "signup" ? (
-                <label className="field-label">
-                  Wie dürfen wir dich nennen?
-                  <input
-                    autoComplete="name"
-                    onChange={(event) => setDisplayName(event.target.value)}
-                    placeholder="Dein Name"
-                    value={displayName}
-                  />
-                </label>
-              ) : null}
-              <label className="field-label">
-                E-Mail-Adresse
-                <input
-                  autoComplete="email"
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="du@beispiel.de"
-                  required
-                  type="email"
-                  value={email}
-                />
-              </label>
-              <label className="field-label">
-                Passwort
-                <input
-                  autoComplete={authMode === "signup" ? "new-password" : "current-password"}
-                  minLength={6}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="Mindestens 6 Zeichen"
-                  required
-                  type="password"
-                  value={password}
-                />
-              </label>
-              {authError ? (
-                <p className="form-feedback form-error" role="alert">{authError}</p>
-              ) : null}
-              {authMessage ? (
-                <p className="form-feedback form-success" role="status">{authMessage}</p>
-              ) : null}
-              <button className="button button-primary auth-submit" disabled={authBusy} type="submit">
-                {authBusy
-                  ? "Einen Moment …"
-                  : authMode === "signup"
-                    ? "Kostenloses Konto erstellen"
-                    : "Anmelden"}
-                {!authBusy ? <ArrowIcon /> : null}
-              </button>
-            </form>
-            <p className="auth-switch">
-              {authMode === "signup" ? "Schon ein Konto?" : "Noch kein Konto?"}{" "}
-              <button
-                onClick={() => {
-                  setAuthMode(authMode === "signup" ? "login" : "signup");
-                  setAuthError("");
-                  setAuthMessage("");
-                }}
-                type="button"
-              >
-                {authMode === "signup" ? "Anmelden" : "Jetzt registrieren"}
-              </button>
-            </p>
-            {!isSupabaseConfigured() ? (
-              <p className="config-note">
-                Lokale Einrichtung fehlt noch: Trage die Supabase-Werte in <code>.env.local</code> ein.
-              </p>
-            ) : null}
-          </section>
-        </div>
-      ) : null}
-
-      {lessonOpen ? (
-        <div className="modal-backdrop">
-          <section
-            aria-labelledby="lesson-title"
-            aria-modal="true"
-            className="dialog lesson-dialog"
-            role="dialog"
-          >
-            <button
-              aria-label="Lektion schließen"
-              className="dialog-close"
-              onClick={() => setLessonOpen(false)}
-              type="button"
-            >
-              <CloseIcon />
-            </button>
-            <p className="section-eyebrow">LEKTION 01 · SALUDOS</p>
-            <h2 id="lesson-title">¡Buenos días!</h2>
-            <p className="dialog-intro">Was bedeutet dieser Gruß auf Deutsch?</p>
-            <div className="answer-list">
-              {answers.map((choice) => {
-                const isCorrect = choice === "Buenos días";
-                const isSelected = answer === choice;
+            <div className="flex flex-col items-center">
+              {unitLessons.map((lesson, li) => {
+                const isDone = completed.has(lesson.id);
+                const isNext = !nextFound && unlocked && !isDone;
+                if (isNext) nextFound = true;
+                const playable = isDone || isNext;
                 return (
-                  <button
-                    aria-pressed={isSelected}
-                    className={`answer-option${isSelected ? (isCorrect ? " answer-correct" : " answer-wrong") : ""}`}
-                    key={choice}
-                    onClick={() => setAnswer(choice)}
-                    type="button"
-                  >
-                    <span className="answer-radio">{isSelected ? (isCorrect ? "✓" : "×") : ""}</span>
-                    {choice}
-                  </button>
+                  <div key={lesson.id} className="flex flex-col items-center">
+                    <button
+                      disabled={!playable}
+                      onClick={() => playable && onStart(lesson)}
+                      className={`w-16 h-16 rounded-full text-2xl flex items-center justify-center border-b-4 ${isDone ? "bg-[#58CC02] border-[#46A302] text-white" : isNext ? "bg-[#FFC800] border-[#E0AC00] text-white" : "bg-[#E5E5E5] border-[#C9C9C9] text-gray-400"}`}
+                      style={{ marginLeft: offsets[li % offsets.length] }}
+                    >
+                      {isDone ? "✓" : lesson.lesson_type === "review" ? "🔁" : lesson.lesson_type === "checkpoint" ? "🏆" : "★"}
+                    </button>
+                    <div className={`text-[10px] font-bold mt-1 mb-3 ${playable ? "text-gray-600" : "text-gray-400"}`}>
+                      {lesson.title_es}{isNext && " ← EMPEZAR"}
+                    </div>
+                  </div>
                 );
               })}
             </div>
-            {answer ? (
-              <p className={`answer-feedback${answer === "Buenos días" ? " feedback-correct" : " feedback-wrong"}`} role="status">
-                {answer === "Buenos días"
-                  ? "¡Muy bien! „Buenos días“ heißt „Guten Morgen“."
-                  : "Fast! „Buenos días“ bedeutet „Guten Morgen“. Versuch es noch einmal."}
-              </p>
-            ) : null}
-            <p className="preview-disclaimer">
-              Interaktive Vorschau. Die originale Canvas-Lektion und das Speichern von XP,
-              Streaks und Wiederholungen werden ergänzt, sobald ihr Seitencode vorliegt.
-            </p>
-          </section>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------- Audio: Aussprache (Web Speech API) ---------------- */
+
+function speak(text: string) {
+  try {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "es-ES";
+    u.rate = 0.9;
+    window.speechSynthesis.speak(u);
+  } catch { /* TTS nicht verfügbar – Übung funktioniert trotzdem */ }
+}
+
+/* ---------------- Lektions-Player ---------------- */
+
+function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
+  lesson: Lesson; profile: Profile | null; userId: string; onExit: () => void; onFinished: () => void;
+}) {
+  const [exercises, setExercises] = useState<Exercise[] | null>(null);
+  const [idx, setIdx] = useState(0);
+  const [wrongCount, setWrongCount] = useState(0);
+  const [feedback, setFeedback] = useState<null | { ok: boolean; correctText: string }>(null);
+  const [input, setInput] = useState("");
+  const [tiles, setTiles] = useState<number[]>([]);
+  const [matchDone, setMatchDone] = useState<string[]>([]);
+  const [matchSel, setMatchSel] = useState<string | null>(null);
+  const [matchErr, setMatchErr] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    supabase.from("exercises").select("*").eq("lesson_id", lesson.id).order("order_index")
+      .then(({ data }) => setExercises((data as Exercise[]) ?? []));
+  }, [lesson.id]);
+
+  if (!exercises) return <main className="min-h-screen flex items-center justify-center">Lektion lädt …</main>;
+  if (exercises.length === 0) {
+    return (
+      <EmptyLesson lesson={lesson} onExit={onExit} />
+    );
+  }
+
+  const item = exercises[idx];
+  const p = item.prompt;
+
+  function finish(ok: boolean, correctText: string) { setFeedback({ ok, correctText }); if (!ok) setWrongCount((w) => w + 1); }
+
+  async function scheduleSrs(ok: boolean) {
+    if (ok) return;
+    const days = [1, 3, 7, 30];
+    const { data: card } = await supabase.from("srs_cards")
+      .select("id, reps").eq("profile_id", userId).eq("exercise_id", item.id).maybeSingle();
+    const reps = (card?.reps ?? 0);
+    const due = new Date(Date.now() + (days[Math.min(reps, 3)] ?? 1) * 86400000).toISOString();
+    if (card?.id) {
+      await supabase.from("srs_cards").update({ due_at: due, reps: reps + 1, last_review_at: new Date().toISOString() }).eq("id", card.id);
+    } else {
+      await supabase.from("srs_cards").insert({ profile_id: userId, exercise_id: item.id, due_at: due, reps: 1 });
+    }
+  }
+
+  async function next() {
+    const wasOk = feedback?.ok;
+    await scheduleSrs(!!wasOk);
+    setFeedback(null); setInput(""); setTiles([]); setMatchDone([]); setMatchSel(null); setMatchErr(0);
+    if (idx + 1 >= exercises.length) { await completeLesson(); } else { setIdx(idx + 1); }
+  }
+
+  async function completeLesson() {
+    setSaving(true);
+    const total = exercises.length;
+    const accuracy = (total - wrongCount) / total;
+    const xp = lesson.xp_reward + (wrongCount === 0 ? 5 : 0);
+    const today = new Date().toISOString().slice(0, 10);
+
+    await supabase.from("lesson_completions").insert({
+      profile_id: userId, lesson_id: lesson.id, accuracy, xp_earned: xp,
+    });
+
+    if (profile) {
+      const isNewDay = profile.streak_last_active !== today;
+      await supabase.from("profiles").update({
+        total_xp: profile.total_xp + xp,
+        streak_count: isNewDay ? profile.streak_count + 1 : profile.streak_count,
+        streak_last_active: today,
+      }).eq("id", userId);
+
+      const { data: act } = await supabase.from("daily_activity").select("xp, minutes")
+        .eq("profile_id", userId).eq("day", today).maybeSingle();
+      await supabase.from("daily_activity").upsert({
+        profile_id: userId, day: today,
+        xp: (act?.xp ?? 0) + xp,
+        minutes: (act?.minutes ?? 0) + 5,
+        exercises_done: total,
+      });
+    }
+    setSaving(false);
+    onFinished();
+  }
+
+  return (
+    <main className="min-h-screen bg-white">
+      <div className="max-w-md mx-auto px-4 py-3 flex items-center gap-4 border-b border-gray-100">
+        <button onClick={onExit} className="text-xl text-gray-400">✕</button>
+        <div className="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full bg-[#58CC02] transition-all" style={{ width: `${((idx + (feedback ? 1 : 0)) / exercises.length) * 100}%` }} />
         </div>
-      ) : null}
+      </div>
+
+      <div className="max-w-md mx-auto px-6 py-8">
+        <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest mb-4">
+          {lesson.title_es} · {idx + 1}/{exercises.length}
+        </div>
+
+        {item.exercise_type === "new_word" && (
+          <div className="text-center flex flex-col items-center gap-3">
+            <div className="text-6xl">{p.emoji ?? "📘"}</div>
+            <div className="text-3xl font-extrabold flex items-center justify-center gap-3">
+              {p.word}
+              <button onClick={() => speak(p.word)} className="text-xl text-[#1CB0F6]" title="Wort vorlesen">🔊</button>
+            </div>
+            <div className="text-xl text-gray-500">{p.translation}</div>
+            {p.hint && <div className="text-sm text-gray-400">💡 {p.hint}</div>}
+          </div>
+        )}
+
+        {item.exercise_type === "mc" && (
+          <div className="flex flex-col gap-3">
+            <div className="text-lg font-bold">{p.question}</div>
+            {(p.options as string[]).map((o, i) => (
+              <button key={i} disabled={!!feedback}
+                onClick={() => finish(i === item.solution.correct, p.options[item.solution.correct])}
+                className="px-4 py-3 rounded-2xl border-2 border-gray-200 font-bold text-left hover:bg-gray-50">
+                {o}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {item.exercise_type === "cloze" && (
+          <div className="flex flex-col gap-4">
+            <div className="text-2xl font-bold text-center">{p.sentence}</div>
+            <div className="text-sm text-gray-400 text-center">💡 {p.hint}</div>
+            <input className="border-2 border-gray-200 rounded-2xl px-4 py-3 text-lg" value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") finish(input.trim().toLowerCase() === item.solution.answer, item.solution.answer); }} />
+          </div>
+        )}
+
+        {item.exercise_type === "word_bank" && (
+          <div className="flex flex-col gap-4">
+            <div className="text-lg font-bold">Übersetze: <span className="text-[#1CB0F6]">{p.sentence}</span></div>
+            <div className="min-h-[48px] border-b-2 border-dashed border-gray-300 text-lg font-bold">
+              {tiles.map((t) => p.tiles[t]).join(" ")}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(p.tiles as string[]).map((t, i) => (
+                <button key={i} disabled={tiles.includes(i) || !!feedback} onClick={() => setTiles([...tiles, i])}
+                  className="px-4 py-2 rounded-xl border-2 border-gray-200 font-bold disabled:opacity-20">{t}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {item.exercise_type === "match" && (
+          <div className="flex flex-col gap-4">
+            <div className="text-lg font-bold">Ordne die Paare zu</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-3">
+                {(p.pairs as any[]).map((pr) => (
+                  <button key={pr.es} disabled={matchDone.includes(pr.es) || !!feedback}
+                    onClick={() => setMatchSel(pr.es)}
+                    className={`px-3 py-3 rounded-xl border-2 font-bold ${matchDone.includes(pr.es) ? "bg-green-50 border-[#58CC02] opacity-60" : matchSel === pr.es ? "border-[#1CB0F6] bg-blue-50" : "border-gray-200"}`}>
+                    {pr.es}
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-col gap-3">
+                {(p.pairs as any[]).map((pr) => (
+                  <button key={pr.de} disabled={matchDone.includes(pr.de) || !!feedback}
+                    onClick={() => {
+                      if (matchSel === pr.es) {
+                        const nd = [...matchDone, pr.es, pr.de];
+                        setMatchDone(nd); setMatchSel(null);
+                        if (nd.length >= (p.pairs as any[]).length * 2 && matchErr === 0) finish(true, "Alle Paare richtig!");
+                        else if (nd.length >= (p.pairs as any[]).length * 2) finish(false, "Mit Fehlern – Paare wiederholen!");
+                      } else { setMatchErr(matchErr + 1); setMatchSel(null); }
+                    }}
+                    className={`px-3 py-3 rounded-xl border-2 font-bold ${matchDone.includes(pr.de) ? "bg-green-50 border-[#58CC02] opacity-60" : "border-gray-200"}`}>
+                    {pr.de}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {feedback && (
+        <div className={`max-w-md mx-auto px-6 pb-6 ${feedback.ok ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>
+          <div className="font-extrabold mb-1">{feedback.ok ? "¡Perfecto!" : "Richtig wäre:"}</div>
+          <div className="text-sm text-gray-500 mb-3">{feedback.ok ? "Weiter so 🌿" : feedback.correctText}</div>
+          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]"
+            onClick={next} disabled={saving}>
+            {saving ? "Speichern …" : idx + 1 >= exercises.length ? "Abschließen" : "Weiter"}
+          </button>
+        </div>
+      )}
+      {!feedback && (
+        <div className="max-w-md mx-auto px-6 pb-6">
+          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302] disabled:opacity-40"
+            disabled={
+              item.exercise_type === "new_word" ? false :
+              item.exercise_type === "match" ? true :
+              item.exercise_type === "mc" ? true :
+              item.exercise_type === "cloze" ? input.trim().length === 0 :
+              tiles.length === 0
+            }
+            onClick={() => {
+              if (item.exercise_type === "new_word") finish(true, "");
+              if (item.exercise_type === "cloze") finish(input.trim().toLowerCase() === item.solution.answer, item.solution.answer);
+              if (item.exercise_type === "word_bank") finish(tiles.map((t) => p.tiles[t]).join(" ") === item.solution.answer, item.solution.answer);
+            }}>
+            {item.exercise_type === "new_word" ? "Verstanden – Weiter" : "Prüfen"}
+          </button>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function EmptyLesson({ lesson, onExit }: { lesson: Lesson; onExit: () => void }) {
+  return (
+    <main className="min-h-screen bg-white flex flex-col items-center justify-center px-8 gap-4 text-center">
+      <div className="text-5xl">🚧</div>
+      <h2 className="text-xl font-extrabold">{lesson.title_es}</h2>
+      <p className="text-sm text-gray-500">
+        Diese Lektion ist im Lernpfad angelegt, ihre Übungen folgen bald. Camino befüllt die Datenbank laufend weiter.
+      </p>
+      <button className="text-[#1CB0F6] font-bold text-sm" onClick={onExit}>Zurück zum Lernpfad</button>
+    </main>
+  );
+}
+
+/* ---------------- Wiederholen (SRS) ---------------- */
+
+function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }) {
+  const [cards, setCards] = useState<any[] | null>(null);
+  const [idx, setIdx] = useState(0);
+  const [ok, setOk] = useState<null | boolean>(null);
+
+  useEffect(() => {
+    supabase.from("srs_cards").select("id, exercises!inner(id, prompt, solution)").eq("profile_id", userId)
+      .lte("due_at", new Date().toISOString()).limit(10)
+      .then(({ data }) => setCards((data as any[]) ?? []));
+  }, [userId]);
+
+  if (!cards) return <main className="min-h-screen flex items-center justify-center">Wiederholungen laden …</main>;
+  if (cards.length === 0) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4">
+        <div className="text-6xl">🎉</div>
+        <p className="text-sm text-gray-500">Keine Wiederholungen fällig. ¡Muy bien!</p>
+        <button className="text-[#1CB0F6] font-bold" onClick={onExit}>Zurück</button>
+      </main>
+    );
+  }
+  if (idx >= cards.length) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4">
+        <div className="text-6xl">🧠</div>
+        <p className="text-sm text-gray-500">Wiederholung abgeschlossen. Camino verschiebt die Karten neu.</p>
+        <button className="text-[#1CB0F6] font-bold" onClick={onExit}>Zurück</button>
+      </main>
+    );
+  }
+
+  const ex = cards[idx].exercises;
+  const p = ex.prompt;
+  const isWord = typeof p.word === "string";
+  const question = isWord ? p.word : p.question ?? p.sentence;
+  const answer = isWord ? p.translation : p.options?.[ex.solution.correct] ?? ex.solution.answer;
+
+  async function answer(okk: boolean) {
+    const cardId = cards[idx].id;
+    const days = [1, 3, 7, 30];
+    const due = new Date(Date.now() + (okk ? days[Math.min(idx % 3 + 1, 3)] : 1) * 86400000).toISOString();
+    await supabase.from("srs_cards").update({ due_at: due, last_review_at: new Date().toISOString() }).eq("id", cardId);
+    setOk(okk);
+  }
+
+  return (
+    <main className="min-h-screen bg-white">
+      <div className="max-w-md mx-auto px-6 py-10 flex flex-col gap-4">
+        <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">Wiederholung · {idx + 1}/{cards.length}</div>
+        <div className="text-sm text-gray-400">Was bedeutet …</div>
+        <div className="text-3xl font-extrabold flex items-center gap-3">
+          {question}
+          {isWord && <button className="text-xl text-[#1CB0F6]" title="Wort vorlesen" onClick={() => speak(question)}>🔊</button>}
+        </div>
+        <div className="flex flex-col gap-3 mt-2">
+          <button className="px-4 py-3 rounded-2xl border-2 border-[#58CC02] font-bold text-[#58CC02] bg-green-50"
+            onClick={() => ok === null && answer(true)}>Gewusst ✓</button>
+          <button className="px-4 py-3 rounded-2xl border-2 border-[#FF4B4B] font-bold text-[#FF4B4B] bg-red-50"
+            onClick={() => ok === null && answer(false)}>Nochmal üben ↻</button>
+        </div>
+        {ok !== null && (
+          <>
+            <div className={`font-extrabold ${ok ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>{ok ? "Richtig!" : "Kommt bald wieder"}</div>
+            <div className="text-lg font-bold">{answer}</div>
+            <button className="bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]"
+              onClick={() => { setOk(null); setIdx(idx + 1); }}>
+              {idx + 1 >= cards.length ? "Fertig" : "Nächste Karte"}
+            </button>
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
+
+/* ---------------- Ziel-Onboarding ---------------- */
+
+const GOALS = [
+  { key: "reisen", icon: "🌎", title: "Reisen", desc: "Unterwegs fragen, einkaufen, navigieren" },
+  { key: "schule", icon: "🎓", title: "Schule", desc: "Vokabeln & Grammatik für den Unterricht" },
+  { key: "beruf", icon: "💼", title: "Beruf", desc: "E-Mails, Meetings, Smalltalk" },
+  { key: "alltag", icon: "🇪🇸", title: "Alltag", desc: "Der komplette Weg von A1 bis B1" },
+];
+
+const GOAL_LABELS: Record<string, string> = { reisen: "🌎 Reisen", schule: "🎓 Schule", beruf: "💼 Beruf", alltag: "🇪🇸 Alltag" };
+
+function OnboardingScreen({ profile, onDone }: { profile: Profile; onDone: () => void }) {
+  const [saving, setSaving] = useState(false);
+
+  async function pick(goal: string) {
+    if (saving) return;
+    setSaving(true);
+    await supabase.from("profiles").update({ learning_goal: goal }).eq("id", profile.id);
+    onDone();
+  }
+
+  return (
+    <main className="min-h-screen bg-white flex flex-col items-center px-8 py-16 max-w-md mx-auto">
+      <div className="text-6xl mb-4">🌿</div>
+      <h1 className="text-2xl font-extrabold">¡Bienvenido a Camino!</h1>
+      <p className="text-sm text-gray-500 text-center mt-2 mb-8">
+        Wofür lernst du Spanisch? Camino merkt sich dein Ziel und passt Empfehlungen und Wiederholungen daran an.
+      </p>
+      <div className="w-full flex flex-col gap-3">
+        {GOALS.map((g) => (
+          <button key={g.key} disabled={saving} onClick={() => pick(g.key)}
+            className="w-full text-left px-4 py-4 rounded-2xl border-2 border-gray-200 hover:border-[#1CB0F6] hover:bg-blue-50 flex items-center gap-4">
+            <span className="text-3xl">{g.icon}</span>
+            <span>
+              <span className="block font-extrabold">{g.title}</span>
+              <span className="block text-xs text-gray-500">{g.desc}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </main>
+  );
+}
+
+/* ---------------- Profil mit Wochenstatistik ---------------- */
+
+function ProfileScreen({ profile, userId, onBack, onPracticeWords }: { profile: Profile | null; userId: string; onBack: () => void; onPracticeWords: () => void }) {
+  const [week, setWeek] = useState<{ day: string; xp: number; minutes: number; exercises_done: number }[] | null>(null);
+  const [lessonsDone, setLessonsDone] = useState(0);
+  const [goal, setGoal] = useState<string | null>(profile?.learning_goal ?? null);
+  const [matTitle, setMatTitle] = useState("");
+  const [matText, setMatText] = useState("");
+  const [matMsg, setMatMsg] = useState("");
+  const [matSaving, setMatSaving] = useState(false);
+  const [materials, setMaterials] = useState<{ id: string; title: string; derived_exercises: number }[]>([]);
+  const [dueWords, setDueWords] = useState(0);
+
+  async function refreshMaterials() {
+    const [mats, dw] = await Promise.all([
+      supabase.from("user_materials").select("id, title, derived_exercises").eq("profile_id", userId).order("created_at", { ascending: false }),
+      supabase.from("user_words").select("id", { count: "exact", head: true }).eq("profile_id", userId).lte("due_at", new Date().toISOString()),
+    ]);
+    const list = ((mats.data as any[]) ?? []);
+    setMaterials(list);
+    setDueWords((dw as any).count ?? 0);
+    const n = list[0]?.derived_exercises ?? 0;
+    setMatMsg(n > 0
+      ? `Gespeichert! 🌱 ${n} Vokabelkarte${n > 1 ? "n" : ""} automatisch erstellt – direkt bei „Meine Wörter“ wiederholbar.`
+      : "Gespeichert – aber keine Vokabeln erkannt. Tipp: eine Karte pro Zeile, z. B. „hola = Hallo“.");
+  }
+
+  useEffect(() => {
+    const from = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+    Promise.all([
+      supabase.from("daily_activity").select("day, xp, minutes, exercises_done")
+        .eq("profile_id", userId).gte("day", from).order("day"),
+      supabase.from("lesson_completions").select("id", { count: "exact", head: true }).eq("profile_id", userId),
+      supabase.from("user_materials").select("id, title, derived_exercises").eq("profile_id", userId).order("created_at", { ascending: false }),
+      supabase.from("user_words").select("id", { count: "exact", head: true }).eq("profile_id", userId).lte("due_at", new Date().toISOString()),
+    ]).then(([act, lc, mats, dw]) => {
+      const map = new Map(((act.data as any[]) ?? []).map((r) => [r.day, r]));
+      const days: { day: string; xp: number; minutes: number; exercises_done: number }[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+        const row: any = map.get(d);
+        days.push({ day: d, xp: row?.xp ?? 0, minutes: row?.minutes ?? 0, exercises_done: row?.exercises_done ?? 0 });
+      }
+      setWeek(days);
+      setLessonsDone((lc as any).count ?? 0);
+      setMaterials(((mats.data as any[]) ?? []));
+      setDueWords((dw as any).count ?? 0);
+    });
+  }, [userId]);
+
+  async function changeGoal(g: string) {
+    setGoal(g);
+    await supabase.from("profiles").update({ learning_goal: g }).eq("id", userId);
+  }
+
+  async function uploadMaterial() {
+    if (!matTitle.trim() || !matText.trim()) { setMatMsg("Bitte Titel und Text eingeben."); return; }
+    setMatSaving(true);
+    const { error } = await supabase.from("user_materials")
+      .insert({ profile_id: userId, title: matTitle.trim(), material_type: "text", content: matText.trim() });
+    setMatSaving(false);
+    if (error) { setMatMsg(error.message); return; }
+    setMatTitle(""); setMatText("");
+    await refreshMaterials();
+  }
+
+  const dayNames = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+  const weekXp = (week ?? []).reduce((s, d) => s + d.xp, 0);
+  const weekMin = (week ?? []).reduce((s, d) => s + d.minutes, 0);
+  const maxXp = Math.max(10, ...(week ?? []).map((d) => d.xp));
+
+  return (
+    <main className="min-h-screen bg-neutral-50">
+      <div className="max-w-md mx-auto px-4 py-6">
+        <div className="flex items-center justify-between mb-6">
+          <button className="text-xl text-gray-400" onClick={onBack}>←</button>
+          <h1 className="text-lg font-extrabold">Profil</h1>
+          <button className="text-xs text-gray-400 font-bold" onClick={async () => { await supabase.auth.signOut(); }}>Abmelden</button>
+        </div>
+
+        {/* Konto */}
+        <div className="bg-white rounded-2xl p-4 flex items-center gap-4 border border-gray-100 mb-4">
+          <div className="w-14 h-14 rounded-full bg-[#58CC02] text-white text-2xl flex items-center justify-center font-extrabold">
+            {(profile?.display_name ?? "C").slice(0, 1).toUpperCase()}
+          </div>
+          <div className="flex-1">
+            <div className="font-extrabold">{profile?.display_name ?? "Camino-Lerner"}</div>
+            <div className="text-xs text-gray-500">
+              Spanisch · Niveau {profile?.cefr_level ?? "A1"} · Ziel: {goal ? GOAL_LABELS[goal] : "–"}
+            </div>
+          </div>
+        </div>
+
+        {/* Statistik + Woche */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 mb-4">
+          <div className="grid grid-cols-3 gap-2 text-center mb-4">
+            <div><div className="text-xl font-extrabold text-amber-500">🔥 {profile?.streak_count ?? 0}</div><div className="text-[10px] text-gray-400 font-bold">SERIE (TAGE)</div></div>
+            <div><div className="text-xl font-extrabold text-[#58CC02]">⚡ {profile?.total_xp ?? 0}</div><div className="text-[10px] text-gray-400 font-bold">XP GESAMT</div></div>
+            <div><div className="text-xl font-extrabold text-[#1CB0F6]">✓ {lessonsDone}</div><div className="text-[10px] text-gray-400 font-bold">LEKTIONEN</div></div>
+          </div>
+          <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest mb-2">
+            Diese Woche · {weekXp} XP · {weekMin} Min.
+          </div>
+          <div className="flex items-end justify-between gap-2 h-28">
+            {(week ?? []).map((d) => {
+              const h = Math.max(4, Math.round((d.xp / maxXp) * 90));
+              const dow = dayNames[new Date(d.day + "T12:00:00").getDay()];
+              return (
+                <div key={d.day} className="flex-1 flex flex-col items-center gap-1">
+                  <div className="w-full rounded-t-lg bg-[#58CC02]" style={{ height: `${h}px`, opacity: d.xp > 0 ? 1 : 0.2 }} />
+                  <div className="text-[10px] text-gray-400 font-bold">{dow}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="text-[11px] text-gray-400 mt-2">Tagesziel: {profile?.daily_goal_minutes ?? 10} Min.</div>
+        </div>
+
+        {/* Lernziel */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 mb-4">
+          <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest mb-3">Lernziel anpassen</div>
+          <div className="grid grid-cols-2 gap-2">
+            {GOALS.map((g) => (
+              <button key={g.key} onClick={() => changeGoal(g.key)}
+                className={`px-3 py-3 rounded-xl border-2 font-bold text-sm ${goal === g.key ? "border-[#58CC02] bg-green-50 text-[#58CC02]" : "border-gray-200 text-gray-600"}`}>
+                {g.icon} {g.title}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Eigenes Material */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 mb-4">
+          <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest mb-1">Eigenes Material</div>
+          <p className="text-[11px] text-gray-500 mb-3">
+            Füge Vokabeln oder Texte aus der Schule ein – Camino baut daraus automatisch Übungen.
+          </p>
+          <input className="w-full border-2 border-gray-200 rounded-xl px-3 py-2 text-sm mb-2"
+            placeholder="Titel, z. B. „Unit 3 Vokabeln“" value={matTitle} onChange={(e) => setMatTitle(e.target.value)} />
+          <textarea className="w-full border-2 border-gray-200 rounded-xl px-3 py-2 text-sm mb-2 h-24"
+            placeholder="Text oder Vokabelliste einfügen …" value={matText} onChange={(e) => setMatText(e.target.value)} />
+          <button className="w-full bg-[#1CB0F6] text-white font-extrabold rounded-xl px-4 py-2 border-b-4 border-[#1899D6] text-sm"
+            disabled={matSaving} onClick={uploadMaterial}>
+            {matSaving ? "Speichern …" : "Material hochladen"}
+          </button>
+          {matMsg && <div className="text-[11px] text-gray-500 mt-2">{matMsg}</div>}
+          {materials.length > 0 && (
+            <div className="mt-3 flex flex-col gap-2">
+              {materials.map((m) => (
+                <div key={m.id} className="flex items-center justify-between text-xs bg-neutral-50 rounded-xl px-3 py-2">
+                  <span className="font-bold text-gray-700 truncate">{m.title}</span>
+                  <span className="text-gray-400 whitespace-nowrap">{m.derived_exercises} Karten</span>
+                </div>
+              ))}
+              {dueWords > 0 && (
+                <button className="w-full bg-amber-50 border-2 border-amber-200 rounded-xl px-3 py-3 font-extrabold text-amber-600 text-sm"
+                  onClick={onPracticeWords}>
+                  🔁 {dueWords} eigene Wort{dueWords > 1 ? "e" : ""} zum Wiederholen
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/* ---------------- Meine Wörter (aus eigenem Material, FSRS-artig) ---------------- */
+
+function MyWordsScreen({ userId, onBack }: { userId: string; onBack: () => void }) {
+  const [cards, setCards] = useState<{ id: string; es: string; de: string; reps: number }[] | null>(null);
+  const [idx, setIdx] = useState(0);
+  const [answered, setAnswered] = useState<null | boolean>(null);
+
+  useEffect(() => {
+    supabase.from("user_words").select("id, es, de, reps")
+      .eq("profile_id", userId).lte("due_at", new Date().toISOString())
+      .order("due_at").limit(15)
+      .then(({ data }) => setCards((data as any[]) ?? []));
+  }, [userId]);
+
+  if (!cards) return <main className="min-h-screen flex items-center justify-center">Wörter laden …</main>;
+
+  if (cards.length === 0) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 text-center px-8">
+        <div className="text-6xl">🌱</div>
+        <p className="text-sm text-gray-500">
+          Gerade ist keines deiner eigenen Wörter dran. Camino plant sie genau dann wieder ein, wenn du sie brauchst.
+        </p>
+        <button className="text-[#1CB0F6] font-bold" onClick={onBack}>Zurück</button>
+      </main>
+    );
+  }
+
+  if (idx >= cards.length) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 text-center px-8">
+        <div className="text-6xl">🧠</div>
+        <p className="text-sm text-gray-500">Alle eigenen Wörter aufgefrischt. ¡Muy bien!</p>
+        <button className="bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]" onClick={onBack}>
+          Zurück zum Profil
+        </button>
+      </main>
+    );
+  }
+
+  const c = cards[idx];
+
+  async function answer(knew: boolean) {
+    if (answered !== null) return;
+    const days = [1, 3, 7, 30];
+    const due = new Date(Date.now() + (knew ? days[Math.min(c.reps, 3)] : 1) * 86400000).toISOString();
+    await supabase.from("user_words").update({
+      due_at: due,
+      reps: knew ? c.reps + 1 : 0,
+      last_review_at: new Date().toISOString(),
+    }).eq("id", c.id);
+    setAnswered(knew);
+  }
+
+  return (
+    <main className="min-h-screen bg-white">
+      <div className="max-w-md mx-auto px-6 py-10 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <button className="text-xl text-gray-400" onClick={onBack}>←</button>
+          <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">Meine Wörter · {idx + 1}/{cards.length}</div>
+          <span className="w-5" />
+        </div>
+        <div className="text-sm text-gray-400">Was bedeutet …</div>
+        <div className="text-3xl font-extrabold flex items-center gap-3">
+          {c.es}
+          <button className="text-xl text-[#1CB0F6]" title="Wort vorlesen" onClick={() => speak(c.es)}>🔊</button>
+        </div>
+        <div className="flex flex-col gap-3 mt-2">
+          <button className="px-4 py-3 rounded-2xl border-2 border-[#58CC02] font-bold text-[#58CC02] bg-green-50"
+            onClick={() => answer(true)}>Gewusst ✓</button>
+          <button className="px-4 py-3 rounded-2xl border-2 border-[#FF4B4B] font-bold text-[#FF4B4B] bg-red-50"
+            onClick={() => answer(false)}>Nochmal üben ↻</button>
+        </div>
+        {answered !== null && (
+          <>
+            <div className={`font-extrabold ${answered ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>
+              {answered ? "¡Perfecto!" : "Kommt morgen wieder"}
+            </div>
+            <div className="text-lg font-bold">{c.de}</div>
+            <button className="bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]"
+              onClick={() => { setAnswered(null); setIdx(idx + 1); }}>
+              {idx + 1 >= cards.length ? "Fertig" : "Nächstes Wort"}
+            </button>
+          </>
+        )}
+      </div>
     </main>
   );
 }
