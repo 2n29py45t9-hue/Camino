@@ -543,7 +543,7 @@ function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }
   const p = ex.prompt;
   const isWord = typeof p.word === "string";
   const question = isWord ? p.word : p.question ?? p.sentence;
-  const answer = isWord ? p.translation : p.options?.[ex.solution.correct] ?? ex.solution.answer;
+  const answerText = isWord ? p.translation : p.options?.[ex.solution.correct] ?? ex.solution.answer;
 
   async function answer(okk: boolean) {
     const cardId = cards[idx].id;
@@ -571,7 +571,7 @@ function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }
         {ok !== null && (
           <>
             <div className={`font-extrabold ${ok ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>{ok ? "Richtig!" : "Kommt bald wieder"}</div>
-            <div className="text-lg font-bold">{answer}</div>
+            <div className="text-lg font-bold">{answerText}</div>
             <button className="bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]"
               onClick={() => { setOk(null); setIdx(idx + 1); }}>
               {idx + 1 >= cards.length ? "Fertig" : "Nächste Karte"}
