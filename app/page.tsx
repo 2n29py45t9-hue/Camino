@@ -548,7 +548,7 @@ function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }
   const answerText = isWord ? p.translation : p.options?.[ex.solution.correct] ?? ex.solution.answer;
 
   async function answer(okk: boolean) {
-    const cardId = cardsList[idx].id;
+    const cardId = cardList[idx].id;
     const days = [1, 3, 7, 30];
     const due = new Date(Date.now() + (okk ? days[Math.min(idx % 3 + 1, 3)] : 1) * 86400000).toISOString();
     await supabase.from("srs_cards").update({ due_at: due, last_review_at: new Date().toISOString() }).eq("id", cardId);
