@@ -304,7 +304,8 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
     );
   }
 
-  const item = exercises[idx];
+	const exs: Exercise[] = exercises;
+  const item = exs[idx];
   const p = item.prompt;
 
   function finish(ok: boolean, correctText: string) { setFeedback({ ok, correctText }); if (!ok) setWrongCount((w) => w + 1); }
@@ -327,12 +328,12 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
     const wasOk = feedback?.ok;
     await scheduleSrs(!!wasOk);
     setFeedback(null); setInput(""); setTiles([]); setMatchDone([]); setMatchSel(null); setMatchErr(0);
-    if (idx + 1 >= exercises.length) { await completeLesson(); } else { setIdx(idx + 1); }
+    if (idx + 1 >= exs.length) { await completeLesson(); } else { setIdx(idx + 1); }
   }
 
   async function completeLesson() {
     setSaving(true);
-    const total = exercises.length;
+    const total = exs.length;
     const accuracy = (total - wrongCount) / total;
     const xp = lesson.xp_reward + (wrongCount === 0 ? 5 : 0);
     const today = new Date().toISOString().slice(0, 10);
@@ -539,6 +540,7 @@ function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }
     );
   }
 
+	const cardList: any[] = cards;
   const ex = cards[idx].exercises;
   const p = ex.prompt;
   const isWord = typeof p.word === "string";
@@ -546,7 +548,7 @@ function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }
   const answerText = isWord ? p.translation : p.options?.[ex.solution.correct] ?? ex.solution.answer;
 
   async function answer(okk: boolean) {
-    const cardId = cards[idx].id;
+    const cardId = cardsList[idx].id;
     const days = [1, 3, 7, 30];
     const due = new Date(Date.now() + (okk ? days[Math.min(idx % 3 + 1, 3)] : 1) * 86400000).toISOString();
     await supabase.from("srs_cards").update({ due_at: due, last_review_at: new Date().toISOString() }).eq("id", cardId);
