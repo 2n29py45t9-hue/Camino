@@ -335,6 +335,7 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
   const [matchDone, setMatchDone] = useState<string[]>([]);
   const [matchSel, setMatchSel] = useState<string | null>(null);
   const [matchErr, setMatchErr] = useState(0);
+  const [matchOrder, setMatchOrder] = useState<number[] | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -342,6 +343,22 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
       .then(({ data }) => setExercises((data as Exercise[]) ?? []));
   }, [lesson.id]);
 
+  // „Ordne die Paare zu“: rechte Spalte mischen, damit Paare nie vorsortiert nebeneinander stehen.
+  useEffect(() => {
+    const cur = exercises?.[idx];
+    if (cur?.exercise_type !== "match") { setMatchOrder(null); return; }
+    const n = (cur.prompt.pairs as any[]).length;
+    const order = Array.from({ length: n }, (_, i) => i);
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    // Falls der Zufall exakt die Original-Reihenfolge trifft: einmal rotieren,
+    // damit die Übung nie „bereits gelöst“ startet.
+    if (n > 1 && order.every((v, i) => v === i)) order.push(order.shift()!);
+    setMatchOrder(order);
+  }, [idx, exercises]);
+	
   if (!exercises) return <main className="min-h-screen flex items-center justify-center">Lektion lädt …</main>;
   if (exercises.length === 0) {
     return (
