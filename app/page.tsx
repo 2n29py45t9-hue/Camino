@@ -171,7 +171,7 @@ export default function CaminoApp() {
         </div>
       </header>
 
-    <div className="max-w-md mx-auto px-4 py-6">
+      <div className="max-w-md mx-auto px-4 py-6 pb-24">
         {dueCount > 0 && (
           <button onClick={() => setView({ name: "review" })}
             className="w-full mb-5 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 text-left">
