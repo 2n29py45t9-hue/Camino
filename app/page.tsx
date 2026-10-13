@@ -273,8 +273,9 @@ function PathView({ units, completed, onStart }: { units: Unit[]; completed: Set
                 return (
                   <div key={lesson.id} className="flex flex-col items-center">
                     <button
-                      disabled={!playable}
-                      onClick={() => playable && onStart(lesson)}
+                      data-current={isNext ? "true" : undefined}
+                       disabled={!playable}
+                       onClick={() => playable && onStart(lesson)}
                       className={`w-16 h-16 rounded-full text-2xl flex items-center justify-center border-b-4 ${isDone ? "bg-[#58CC02] border-[#46A302] text-white" : isNext ? "bg-[#FFC800] border-[#E0AC00] text-white" : "bg-[#E5E5E5] border-[#C9C9C9] text-gray-400"}`}
                       style={{ marginLeft: offsets[li % offsets.length] }}
                     >
