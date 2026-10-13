@@ -177,14 +177,18 @@ function AuthScreen({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
 
-  async function submit() {
-    setMsg("");
+async function submit() {
+  setMsg("");
+  try {
     const fn = mode === "signup" ? supabase.auth.signUp : supabase.auth.signInWithPassword;
     const { error } = await fn({ email, password });
     if (error) { setMsg(error.message); return; }
     if (mode === "signup") setMsg("Prüfe dein Postfach zur Bestätigung – oder deaktiviere „Confirm email“ im Supabase-Dashboard.");
-    onDone();
+  } catch (e: any) {
+    setMsg("Verbindung zu Supabase fehlgeschlagen: " + (e?.message ?? String(e)));
   }
+  onDone();
+}  
 
   return (
     <main className="min-h-screen bg-white flex flex-col items-center justify-center px-8 gap-4">
