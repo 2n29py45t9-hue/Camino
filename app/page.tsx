@@ -59,7 +59,7 @@ export default function CaminoApp() {
   const [units, setUnits] = useState<Unit[]>([]);
   const [completedLessonIds, setCompletedLessonIds] = useState<Set<string>>(new Set());
   const [dueCount, setDueCount] = useState(0);
-  const [view, setView] = useState<{ name: "path" } | { name: "lesson"; lesson: Lesson } | { name: "review" } | { name: "profile" } | { name: "mywords" }>({ name: "path" });
+  const [view, setView] = useState<{ name: "path" } | { name: "lesson"; lesson: Lesson } | { name: "review" } | { name: "profile" } | { name: "mywords" }| { name: "placement" }>({ name: "path" });
   const [loading, setLoading] = useState(true);
 
   const loadAll = useCallback(async (uid: string) => {
