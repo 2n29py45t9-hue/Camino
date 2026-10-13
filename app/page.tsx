@@ -119,6 +119,19 @@ export default function CaminoApp() {
 	return <MyWordsScreen userId={session.user.id} onBack={() => setView({ name: "profile" })} />;
   }
 
+  if (view.name === "placement") {
+    return (
+      <PlacementTest
+        units={units}
+        completed={completedLessonIds}
+        userId={session.user.id}
+        profile={profile}
+        onExit={() => setView({ name: "path" })}
+        onFinished={() => { loadAll(session.user.id); setView({ name: "path" }); }}
+      />
+    );
+  }
+
   if (view.name === "lesson") {
     return (
       <LessonPlayer
@@ -156,6 +169,14 @@ export default function CaminoApp() {
             <div className="text-xs text-gray-500">Camino hat geplant, was du jetzt auffrischen solltest.</div>
           </button>
         )}
+
+        <button onClick={() => setView({ name: "placement" })}
+          className="w-full mb-5 bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 text-left">
+          <div className="font-extrabold text-[#1CB0F6]">🧭 Einstufungstest</div>
+          <div className="text-xs text-gray-500">
+            Schon Spanisch-Vorkenntnisse? Überspringe Anfänger-Units und starte an deinem Niveau.
+          </div>
+        </button>
 
         <PathView
           units={units}
@@ -238,7 +259,7 @@ function PathView({ units, completed, onStart }: { units: Unit[]; completed: Set
             <div className={`rounded-2xl p-3 mb-2 flex items-center gap-3 ${unlocked ? "bg-[#58CC02]" : "bg-gray-300"}`}>
               <span className="text-2xl">{unlocked ? (unit.icon ?? "📘") : "🔒"}</span>
               <div className="text-white flex-1">
-                <div className="font-extrabold">{unit.title_es} <span className="text-xs opacity-70">· A1</span></div>
+                <div className="font-extrabold">{unit.title_es} <span className="text-xs opacity-70">· {unit.cefr_level}</span></div>
                 <div className="text-xs opacity-80">{unit.title_de}</div>
               </div>
               {unitDone && <span className="text-white">✓</span>}
@@ -624,6 +645,319 @@ function ReviewScreen({ userId, onExit }: { userId: string; onExit: () => void }
           </>
         )}
       </div>
+    </main>
+  );
+}
+
+/* ---------------- Einstufungstest ---------------- */
+
+type PlacementBlock = { unit: Unit; items: Exercise[] };
+
+function PlacementTest({ units, completed, userId, profile, onExit, onFinished }: {
+  units: Unit[]; completed: Set<string>; userId: string; profile: Profile | null;
+  onExit: () => void; onFinished: () => void;
+}) {
+  const [phase, setPhase] = useState<"intro" | "quiz" | "saving" | "result">("intro");
+  const [blocks, setBlocks] = useState<PlacementBlock[]>([]);
+  const [blockIdx, setBlockIdx] = useState(0);
+  const [qIdx, setQIdx] = useState(0);
+  const [unitOk, setUnitOk] = useState(0);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [input, setInput] = useState("");
+  const [tiles, setTiles] = useState<number[]>([]);
+  const [feedback, setFeedback] = useState<null | { ok: boolean; text: string }>(null);
+  const [result, setResult] = useState<{ placed: Unit | null; skipped: number; passedAll: boolean } | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
+
+  function sampleThree<T>(arr: T[]): T[] {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, 3);
+  }
+
+  async function start() {
+    setStarting(true);
+    setError("");
+    try {
+      const lessonToUnit = new Map<string, Unit>();
+      for (const u of units) for (const l of u.lessons) lessonToUnit.set(l.id, u);
+      const { data, error: fetchErr } = await supabase.from("exercises").select("*")
+        .in("exercise_type", ["mc", "cloze", "word_bank"]);
+      if (fetchErr) throw fetchErr;
+      const byUnit = new Map<string, Exercise[]>();
+      for (const e of (data ?? []) as Exercise[]) {
+        const u = lessonToUnit.get(e.lesson_id);
+        if (!u) continue;
+        const list = byUnit.get(u.id) ?? [];
+        list.push(e);
+        byUnit.set(u.id, list);
+      }
+      setBlocks(units
+        .filter((u) => (byUnit.get(u.id)?.length ?? 0) > 0)
+        .map((u) => ({ unit: u, items: sampleThree(byUnit.get(u.id) as Exercise[]) })));
+      setPhase("quiz");
+    } catch (e: any) {
+      setError("Fragen konnten nicht geladen werden: " + (e?.message ?? String(e)));
+    }
+    setStarting(false);
+  }
+
+  async function finishPlacement(reachedBlockIdx: number) {
+    setPhase("saving");
+    setError("");
+    try {
+      // Alle Units vor dem Einstiegspunkt als erledigt markieren (ohne XP, ohne Duplikate).
+      const passedUnits = blocks.slice(0, reachedBlockIdx).map((b) => b.unit);
+      const rows = passedUnits.flatMap((u) =>
+        u.lessons
+          .filter((l) => !completed.has(l.id))
+          .map((l) => ({ profile_id: userId, lesson_id: l.id, accuracy: 1, xp_earned: 0 }))
+      );
+      if (rows.length > 0) {
+        const { error: insErr } = await supabase.from("lesson_completions").insert(rows);
+        if (insErr) throw insErr;
+      }
+      // Niveau im Profil auf die Unit setzen, an der der Nutzer startet.
+      const placed = blocks[reachedBlockIdx]?.unit ?? null;
+      if (placed && profile && placed.cefr_level !== profile.cefr_level) {
+        const { error: updErr } = await supabase.from("profiles")
+          .update({ cefr_level: placed.cefr_level }).eq("id", userId);
+        if (updErr) throw updErr;
+      }
+      setResult({ placed, skipped: rows.length, passedAll: placed === null });
+    } catch (e: any) {
+      setError("Speichern fehlgeschlagen: " + (e?.message ?? String(e)));
+      setResult(null);
+    }
+    setPhase("result");
+  }
+
+  /* ---------- Intro ---------- */
+  if (phase === "intro") {
+    return (
+      <main className="min-h-screen bg-white flex flex-col max-w-md mx-auto px-8 py-8">
+        <button className="text-xl text-gray-400 self-end" onClick={onExit} title="Beenden">✕</button>
+        <div className="text-6xl text-center mb-4 anim-pop">🧭</div>
+        <h1 className="text-2xl font-extrabold text-center">Einstufungstest</h1>
+        <p className="text-sm text-gray-500 text-center mt-3">
+          Schon Spanisch gelernt? Camino testet dich kurz durch den Kurs und setzt dich an den Punkt, der zu dir passt.
+        </p>
+        <div className="text-sm text-gray-600 flex flex-col gap-3 mt-6 mb-8">
+          <div className="flex gap-3"><span>✅</span><span>Jede Unit: 3 Fragen – mindestens 2 richtig, dann geht es weiter zur nächsten Unit.</span></div>
+          <div className="flex gap-3"><span>🚀</span><span>Geschaffte Units werden als erledigt markiert (ohne XP) – dein bisheriger Fortschritt bleibt erhalten.</span></div>
+          <div className="flex gap-3"><span>⏱️</span><span>Dauert ca. 5–10 Minuten. Abbrechen ist jederzeit möglich, es wird nichts gespeichert.</span></div>
+        </div>
+        {error && <div className="text-xs text-[#FF4B4B] text-center mb-3">{error}</div>}
+        <button className="w-full bg-[#1CB0F6] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#1899D6]
+          transition-all duration-100 active:translate-y-[2px] active:border-b-0 disabled:opacity-40"
+          disabled={starting} onClick={start}>
+          {starting ? "Fragen laden …" : "Test starten"}
+        </button>
+      </main>
+    );
+  }
+
+  /* ---------- Speichern ---------- */
+  if (phase === "saving") {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-3">
+        <div className="text-5xl anim-pop">🧭</div>
+        <p className="text-sm text-gray-500">Einstufung wird gespeichert …</p>
+      </main>
+    );
+  }
+
+  /* ---------- Ergebnis ---------- */
+  if (phase === "result") {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center px-8 max-w-md mx-auto text-center gap-4">
+        {!error && result?.passedAll && (
+          <>
+            <div className="text-6xl anim-pop">🏆</div>
+            <h1 className="text-2xl font-extrabold">¡Increíble! Alles gemeistert!</h1>
+            <p className="text-sm text-gray-500">
+              Du hast alle {blocks.length} Units bestanden – der komplette Kurs ist freigeschaltet.
+              Jetzt perfekt: Wiederholungen, eigenes Material und die Checkpoint-Examen.
+            </p>
+          </>
+        )}
+        {!error && result && !result.passedAll && (
+          <>
+            <div className="text-6xl anim-pop">🧭</div>
+            <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">Dein Einstiegspunkt</div>
+            <h1 className="text-2xl font-extrabold flex items-center gap-2">
+              <span className="anim-pop inline-block">{result.placed?.icon ?? "📘"}</span>
+              {result.placed?.title_es}
+            </h1>
+            <p className="text-xs text-gray-400 font-bold">
+              {result.placed?.cefr_level} · {result.placed?.title_de}
+            </p>
+            <p className="text-sm text-gray-500">
+              {result.skipped > 0
+                ? `${result.skipped} Lektion${result.skipped > 1 ? "en" : ""} übersprungen und als erledigt markiert – du startest genau hier. 🌿`
+                : "Perfekt für den Anfang – hier passt du gut rein. 🌿"}
+            </p>
+            <p className="text-xs text-gray-400">
+              Übersprungene Lektionen kannst du jederzeit freiwillig nachspielen.
+            </p>
+          </>
+        )}
+        {error && (
+          <>
+            <div className="text-5xl">⚠️</div>
+            <h1 className="text-xl font-extrabold text-[#FF4B4B]">Speichern fehlgeschlagen</h1>
+            <p className="text-sm text-gray-500">{error}</p>
+          </>
+        )}
+        <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]
+          transition-all duration-100 active:translate-y-[2px] active:border-b-0"
+          onClick={error ? onExit : onFinished}>
+          {error ? "Zurück zum Lernpfad" : "Los geht's 🌿"}
+        </button>
+      </main>
+    );
+  }
+
+  /* ---------- Quiz ---------- */
+  const block = blocks[blockIdx];
+  if (!block || block.items.length === 0) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 text-center px-8">
+        <div className="text-5xl">🚧</div>
+        <p className="text-sm text-gray-500">Keine Testfragen gefunden. Bitte später erneut versuchen.</p>
+        <button className="text-[#1CB0F6] font-bold" onClick={onExit}>Zurück</button>
+      </main>
+    );
+  }
+  const item = block.items[qIdx];
+  const p = item.prompt;
+
+  function finish(ok: boolean, text: string) {
+    setFeedback({ ok, text });
+    if (ok) setUnitOk((n) => n + 1);
+  }
+
+  async function next() {
+    setFeedback(null); setInput(""); setTiles([]); setPicked(null);
+    if (qIdx + 1 < block.items.length) { setQIdx(qIdx + 1); return; }
+    // Unit-Block ist zu Ende: mind. 2 von 3 richtig = bestanden.
+    const need = Math.max(1, Math.ceil(block.items.length * 0.66));
+    const okNow = unitOk; // enthält die gerade beantwortete Frage bereits
+    setUnitOk(0);
+    if (okNow >= need && blockIdx + 1 >= blocks.length) { await finishPlacement(blocks.length); return; }
+    if (okNow >= need) { setBlockIdx(blockIdx + 1); setQIdx(0); return; }
+    await finishPlacement(blockIdx);
+  }
+
+  return (
+    <main className="min-h-screen bg-white">
+      <div className="max-w-md mx-auto px-4 py-3 flex items-center gap-3 border-b border-gray-100">
+        <button onClick={onExit} title="Test beenden (nichts wird gespeichert)"
+          className="text-xl text-gray-400 transition-transform duration-200 hover:rotate-90 hover:text-gray-600">✕</button>
+        <div className="flex-1 flex flex-wrap gap-1.5 justify-center">
+          {blocks.map((b, i) => (
+            <span key={b.unit.id}
+              className={`w-2.5 h-2.5 rounded-full ${i < blockIdx ? "bg-[#58CC02]" : i === blockIdx ? "bg-[#FFC800]" : "bg-gray-200"}`} />
+          ))}
+        </div>
+        <span className="text-xs font-extrabold text-gray-400 whitespace-nowrap">{qIdx + 1}/{block.items.length}</span>
+      </div>
+
+      <div className="max-w-md mx-auto px-6 py-6">
+        <div className="flex items-center gap-3 mb-6">
+          <span className="text-2xl">{block.unit.icon ?? "📘"}</span>
+          <div>
+            <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">
+              Einstufung · {block.unit.cefr_level} · Unit {block.unit.order_index}
+            </div>
+            <div className="font-extrabold">{block.unit.title_es} <span className="text-xs text-gray-400 font-bold">– {block.unit.title_de}</span></div>
+          </div>
+        </div>
+
+        <div key={`${blockIdx}-${qIdx}`} className="anim-slide-up">
+          {item.exercise_type === "mc" && (
+            <div className="flex flex-col gap-3">
+              <div className="text-lg font-bold">{p.question}</div>
+              {(p.options as string[]).map((o, i) => (
+                <button key={i} disabled={!!feedback}
+                  onClick={() => { setPicked(i); finish(i === item.solution.correct, p.options[item.solution.correct]); }}
+                  className={`px-4 py-3 rounded-2xl border-2 font-bold text-left transition-all duration-150
+                    ${feedback
+                      ? (i === item.solution.correct
+                        ? "border-[#58CC02] bg-green-50 text-[#58CC02]"
+                        : i === picked
+                          ? "border-[#FF4B4B] bg-red-50 text-[#FF4B4B] anim-shake"
+                          : "border-gray-200 text-gray-400 opacity-50")
+                      : "border-gray-200 hover:bg-gray-50 hover:border-gray-300 active:scale-[0.98]"}`}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {item.exercise_type === "cloze" && (
+            <div className={`flex flex-col gap-4 ${feedback && !feedback.ok ? "anim-shake" : ""}`}>
+              <div className="text-2xl font-bold text-center">{p.sentence}</div>
+              <div className="text-sm text-gray-400 text-center">💡 {p.hint}</div>
+              <input autoFocus className="border-2 border-gray-200 focus:border-[#1CB0F6] focus:outline-none rounded-2xl px-4 py-3 text-lg transition-colors" value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !feedback) finish(input.trim().toLowerCase() === item.solution.answer, item.solution.answer); }} />
+            </div>
+          )}
+
+          {item.exercise_type === "word_bank" && (
+            <div className="flex flex-col gap-4">
+              <div className="text-lg font-bold">Übersetze: <span className="text-[#1CB0F6]">{p.sentence}</span></div>
+              <div className="min-h-[48px] border-b-2 border-dashed border-gray-300 text-lg font-bold">
+                {tiles.map((t) => p.tiles[t]).join(" ")}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(p.tiles as string[]).map((t, i) => (
+                  <button key={i} disabled={tiles.includes(i) || !!feedback} onClick={() => setTiles([...tiles, i])}
+                    className={`px-4 py-2 rounded-xl border-2 font-bold transition-all duration-150
+                      ${tiles.includes(i) ? "border-gray-200 bg-gray-100 opacity-30" : "border-gray-200 hover:border-gray-300 active:scale-95"}`}>{t}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {feedback && (
+        <div className="max-w-md mx-auto px-6 pb-6 anim-slide-up">
+          <div className={`text-3xl mb-1 ${feedback.ok ? "anim-pop" : "anim-shake"}`}>{feedback.ok ? "🎉" : "💪"}</div>
+          <div className={`font-extrabold mb-1 ${feedback.ok ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>
+            {feedback.ok ? "¡Perfecto!" : "Richtig wäre:"}
+          </div>
+          <div className="text-sm text-gray-500 mb-3">{feedback.ok ? "Weiter so 🌿" : feedback.text}</div>
+          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]
+            transition-all duration-100 active:translate-y-[2px] active:border-b-0 hover:brightness-105"
+            onClick={next}>
+            Weiter
+          </button>
+        </div>
+      )}
+      {!feedback && (
+        <div className="max-w-md mx-auto px-6 pb-6">
+          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]
+            transition-all duration-100 active:translate-y-[2px] active:border-b-0 hover:brightness-105 disabled:opacity-40 disabled:pointer-events-none"
+            disabled={
+              item.exercise_type === "mc" ? true :
+              item.exercise_type === "cloze" ? input.trim().length === 0 :
+              tiles.length === 0
+            }
+            onClick={() => {
+              if (item.exercise_type === "cloze") finish(input.trim().toLowerCase() === item.solution.answer, item.solution.answer);
+              if (item.exercise_type === "word_bank") finish(tiles.map((t) => p.tiles[t]).join(" ") === item.solution.answer, item.solution.answer);
+            }}>
+            Prüfen
+          </button>
+        </div>
+      )}
     </main>
   );
 }
