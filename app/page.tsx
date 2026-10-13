@@ -526,7 +526,12 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
                   ))}
                 </div>
                 <div className="flex flex-col gap-3">
-                  {(p.pairs as any[]).map((pr) => (
+                  {(() => {
+                    const pairs = p.pairs as any[];
+                    // Bis der Misch-Effekt greift: umgedrehte Reihenfolge als Fallback (nie vorsortiert).
+                    const order = matchOrder ?? pairs.map((_, i) => pairs.length - 1 - i);
+                    return order.map((pi) => pairs[pi]);
+                  })().map((pr) => (
                     <button key={pr.de} disabled={matchDone.includes(pr.de) || !!feedback}
                       onClick={() => {
                         if (matchSel === pr.es) {
