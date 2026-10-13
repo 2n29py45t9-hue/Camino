@@ -15,7 +15,8 @@ type Unit = {
   order_index: number;
   title_es: string;
   title_de: string;
-  icon: string | null;
+	cefr_level: string; 	
+	icon: string | null;
   lessons: Lesson[];
 };
 
