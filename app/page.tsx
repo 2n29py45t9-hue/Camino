@@ -254,45 +254,77 @@ async function submit() {
 /* ---------------- Lernpfad ---------------- */
 
 function PathView({ units, completed, onStart }: { units: Unit[]; completed: Set<string>; onStart: (l: Lesson) => void }) {
-  const offsets = [0, 40, 72, 40, 0, -40, -72, -40];
   let nextFound = false;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-8">
       {units.map((unit) => {
         const unitLessons = unit.lessons;
-        const unitDone = unitLessons.every((l) => completed.has(l.id));
+        const doneCount = unitLessons.filter((l) => completed.has(l.id)).length;
+        const unitDone = doneCount > 0 && doneCount === unitLessons.length;
         const unlocked = unit.order_index === 1 || units.find((u) => u.order_index === unit.order_index - 1)
           ?.lessons.every((l) => completed.has(l.id));
+        const unitXp = unitLessons.reduce((sum, l) => sum + l.xp_reward, 0);
+        const pct = unitLessons.length > 0 ? Math.round((doneCount / unitLessons.length) * 100) : 0;
         return (
           <div key={unit.id}>
-            <div className={`rounded-2xl p-3 mb-2 flex items-center gap-3 ${unlocked ? "bg-[#58CC02]" : "bg-gray-300"}`}>
-              <span className="text-2xl">{unlocked ? (unit.icon ?? "📘") : "🔒"}</span>
-              <div className="text-white flex-1">
-                <div className="font-extrabold">{unit.title_es} <span className="text-xs opacity-70">· {unit.cefr_level}</span></div>
-                <div className="text-xs opacity-80">{unit.title_de}</div>
+            {/* Unit-Kopf: Titel, Untertitel, Fortschrittsbalken & XP (wie in der Vorlage) */}
+            <div className={`rounded-2xl p-4 mb-6 ${unlocked ? "bg-[#58CC02]" : "bg-gray-300"}`}>
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">{unlocked ? (unit.icon ?? "📘") : "🔒"}</span>
+                <div className="text-white flex-1 min-w-0">
+                  <div className="font-extrabold">{unit.title_es} <span className="text-xs opacity-70">· {unit.cefr_level}</span></div>
+                  <div className="text-xs opacity-80 truncate">{unit.title_de}</div>
+                </div>
+                {unitDone && <span className="text-white text-xl">✓</span>}
               </div>
-              {unitDone && <span className="text-white">✓</span>}
+              <div className="mt-3 flex items-center gap-2">
+                <div className="flex-1 h-3 rounded-full bg-black/20 overflow-hidden">
+                  <div className="h-full rounded-full bg-white transition-all duration-500" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="text-[11px] font-extrabold text-white whitespace-nowrap">{doneCount}/{unitLessons.length}</span>
+                <span className="text-[11px] font-extrabold text-white bg-black/15 rounded-lg px-2 py-0.5 whitespace-nowrap">+{unitXp} XP</span>
+              </div>
             </div>
-            <div className="flex flex-col items-center">
-              {unitLessons.map((lesson, li) => {
+
+            {/* Gerader Pfad: durchgehende Linie mittig, Knoten liegen darauf */}
+            <div className="relative flex flex-col items-center">
+              <div className={`absolute left-1/2 top-4 bottom-8 -translate-x-1/2 w-1.5 rounded-full ${unlocked ? "bg-[#58CC02]" : "bg-gray-200"}`} />
+              {unitLessons.map((lesson) => {
                 const isDone = completed.has(lesson.id);
                 const isNext = !nextFound && unlocked && !isDone;
                 if (isNext) nextFound = true;
                 const playable = isDone || isNext;
                 return (
-                  <div key={lesson.id} className="flex flex-col items-center">
-                    <button
-                      data-current={isNext ? "true" : undefined}
-                       disabled={!playable}
-                       onClick={() => playable && onStart(lesson)}
-                      className={`w-16 h-16 rounded-full text-2xl flex items-center justify-center border-b-4 ${isDone ? "bg-[#58CC02] border-[#46A302] text-white" : isNext ? "bg-[#FFC800] border-[#E0AC00] text-white" : "bg-[#E5E5E5] border-[#C9C9C9] text-gray-400"}`}
-                      style={{ marginLeft: offsets[li % offsets.length] }}
-                    >
-                      {isDone ? "✓" : lesson.lesson_type === "review" ? "🔁" : lesson.lesson_type === "checkpoint" ? "🏆" : "★"}
-                    </button>
-                    <div className={`text-[10px] font-bold mt-1 mb-3 ${playable ? "text-gray-600" : "text-gray-400"}`}>
-                      {lesson.title_es}{isNext && " ← EMPEZAR"}
+                  <div key={lesson.id} className="flex flex-col items-center w-full">
+                    <div className="py-4">
+                      <div className="relative">
+                        {/* Sprechblase am aktuellen Knoten */}
+                        {isNext && (
+                          <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 z-20">
+                            <div className="anim-float">
+                              <div className="relative bg-white border-2 border-[#58CC02] rounded-2xl px-4 py-1.5 shadow-sm whitespace-nowrap">
+                                <span className="font-extrabold text-[#58CC02] text-sm">EMPEZAR</span>
+                                <span className="absolute right-full top-1/2 -translate-y-1/2 border-y-[7px] border-y-transparent border-r-[8px] border-r-[#58CC02]" />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        <button
+                          data-current={isNext ? "true" : undefined}
+                          disabled={!playable}
+                          onClick={() => playable && onStart(lesson)}
+                          className={`relative z-10 w-16 h-16 rounded-full text-2xl flex items-center justify-center border-b-4 transition-all duration-150
+                            ${isDone ? "bg-[#58CC02] border-[#46A302] text-white"
+                              : isNext ? "bg-[#58CC02] border-[#46A302] text-white scale-110"
+                              : "bg-[#E5E5E5] border-[#C9C9C9] text-gray-400"}
+                            ${playable ? "hover:brightness-105 active:translate-y-[2px] active:border-b-2" : ""}`}>
+                          {isDone ? "✓" : unlocked ? (lesson.lesson_type === "review" ? "🔁" : lesson.lesson_type === "checkpoint" ? "🏆" : "★") : "🔒"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className={`text-[10px] font-bold mb-4 text-center bg-white px-2 rounded ${playable ? "text-gray-600" : "text-gray-400"}`}>
+                      {lesson.title_es}
                     </div>
                   </div>
                 );
