@@ -3,10 +3,9 @@
 import { createClient } from "@supabase/supabase-js";
 import { useCallback, useEffect, useState } from "react";
 
-// Verbindet sich mit deiner Camino-Datenbank (RLS schützt alle Daten).
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://zsjhzwpjjjniqkxlrasp.supabase.co",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "sb_publishable_fXYVZxnsLXFdEfpEs2cFqw_gH3U9MjS"
 );
 
 /* ---------------- Typen ---------------- */
