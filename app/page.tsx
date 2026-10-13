@@ -116,12 +116,19 @@ export default function CaminoApp() {
 
   if (view.name === "profile") {
     return (
-      <ProfileScreen
-        profile={profile}
-        userId={session.user.id}
-        onBack={() => { loadAll(session.user.id); setView({ name: "path" }); }}
-        onPracticeWords={() => setView({ name: "mywords" })}
-      />
+      <>
+        <ProfileScreen
+          profile={profile}
+          userId={session.user.id}
+          onBack={() => { loadAll(session.user.id); setView({ name: "path" }); }}
+          onPracticeWords={() => setView({ name: "mywords" })}
+        />
+        <BottomNav
+          active="profile"
+          onPath={() => { loadAll(session.user.id); setView({ name: "path" }); }}
+          onProfile={() => {}}
+        />
+      </>
     );
   }
 
@@ -198,6 +205,12 @@ export default function CaminoApp() {
           ⚡ {profile?.total_xp ?? 0} XP · Serien-Tag {profile?.streak_last_active ?? "–"}
         </div>
       </div>
+
+      <BottomNav
+        active="path"
+        onPath={() => {}}
+        onProfile={() => setView({ name: "profile" })}
+      />
     </main>
   );
 }
@@ -1167,7 +1180,7 @@ function ProfileScreen({ profile, userId, onBack, onPracticeWords }: { profile: 
 
   return (
     <main className="min-h-screen bg-neutral-50">
-      <div className="max-w-md mx-auto px-4 py-6">
+      <div className="max-w-md mx-auto px-4 py-6 pb-24">
         <div className="flex items-center justify-between mb-6">
           <button className="text-xl text-gray-400" onClick={onBack}>←</button>
           <h1 className="text-lg font-extrabold">Profil</h1>
