@@ -1559,3 +1559,10 @@ input:focus-visible {
 .anim-slide-up { animation: slideUp 0.3s ease-out; }
 .anim-pop       { animation: popIn 0.35s ease-out; }
 .anim-shake     { animation: shake 0.4s ease-in-out; }
+
+/* ---------- Camino: schwebende EMPEZAR-Sprechblase ---------- */
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.anim-float { animation: floaty 1.6s ease-in-out infinite; }
