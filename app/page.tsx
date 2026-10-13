@@ -32,7 +32,8 @@ type Lesson = {
 
 type Exercise = {
   id: string;
-  order_index: number;
+	lesson_id: string;
+	order_index: number;
   exercise_type: string;
   prompt: any;
   solution: any;
