@@ -284,6 +284,7 @@ function speak(text: string) {
   } catch { /* TTS nicht verfügbar – Übung funktioniert trotzdem */ }
 }
 
+
 /* ---------------- Lektions-Player ---------------- */
 
 function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
@@ -292,6 +293,8 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
   const [exercises, setExercises] = useState<Exercise[] | null>(null);
   const [idx, setIdx] = useState(0);
   const [wrongCount, setWrongCount] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [picked, setPicked] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<null | { ok: boolean; correctText: string }>(null);
   const [input, setInput] = useState("");
   const [tiles, setTiles] = useState<number[]>([]);
@@ -312,11 +315,15 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
     );
   }
 
-	const exs: Exercise[] = exercises;
+  const exs: Exercise[] = exercises;
   const item = exs[idx];
   const p = item.prompt;
 
-  function finish(ok: boolean, correctText: string) { setFeedback({ ok, correctText }); if (!ok) setWrongCount((w) => w + 1); }
+  function finish(ok: boolean, correctText: string) {
+    setFeedback({ ok, correctText });
+    if (ok) setCombo((c) => c + 1);
+    else { setWrongCount((w) => w + 1); setCombo(0); }
+  }
 
   async function scheduleSrs(ok: boolean) {
     if (ok) return;
@@ -335,7 +342,7 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
   async function next() {
     const wasOk = feedback?.ok;
     await scheduleSrs(!!wasOk);
-    setFeedback(null); setInput(""); setTiles([]); setMatchDone([]); setMatchSel(null); setMatchErr(0);
+    setFeedback(null); setInput(""); setTiles([]); setMatchDone([]); setMatchSel(null); setMatchErr(0); setPicked(null);
     if (idx + 1 >= exs.length) { await completeLesson(); } else { setIdx(idx + 1); }
   }
 
@@ -373,115 +380,141 @@ function LessonPlayer({ lesson, profile, userId, onExit, onFinished }: {
 
   return (
     <main className="min-h-screen bg-white">
-      <div className="max-w-md mx-auto px-4 py-3 flex items-center gap-4 border-b border-gray-100">
-        <button onClick={onExit} className="text-xl text-gray-400">✕</button>
+      <div className="max-w-md mx-auto px-4 py-3 flex items-center gap-4 border-b border-gray-100 relative">
+        <button onClick={onExit} title="Lektion verlassen"
+          className="text-xl text-gray-400 transition-transform duration-200 hover:rotate-90 hover:text-gray-600">✕</button>
         <div className="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden">
-          <div className="h-full bg-[#58CC02] transition-all" style={{ width: `${((idx + (feedback ? 1 : 0)) / exercises.length) * 100}%` }} />
+          <div className="h-full bg-gradient-to-r from-[#58CC02] to-[#89E219] transition-all duration-500"
+            style={{ width: `${((idx + (feedback ? 1 : 0)) / exs.length) * 100}%` }} />
         </div>
+        {combo >= 3 && !feedback && (
+          <div className="anim-pop absolute right-4 -top-1 bg-amber-100 text-amber-600 text-xs font-extrabold px-3 py-1 rounded-full shadow-sm">
+            🔥 Kombo {combo}
+          </div>
+        )}
       </div>
 
       <div className="max-w-md mx-auto px-6 py-8">
         <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest mb-4">
-          {lesson.title_es} · {idx + 1}/{exercises.length}
+          {lesson.title_es} · {idx + 1}/{exs.length}
         </div>
 
-        {item.exercise_type === "new_word" && (
-          <div className="text-center flex flex-col items-center gap-3">
-            <div className="text-6xl">{p.emoji ?? "📘"}</div>
-            <div className="text-3xl font-extrabold flex items-center justify-center gap-3">
-              {p.word}
-              <button onClick={() => speak(p.word)} className="text-xl text-[#1CB0F6]" title="Wort vorlesen">🔊</button>
+        <div key={idx} className="anim-slide-up">
+          {item.exercise_type === "new_word" && (
+            <div className="text-center flex flex-col items-center gap-3">
+              <div className="text-6xl anim-pop">{p.emoji ?? "📘"}</div>
+              <div className="text-3xl font-extrabold flex items-center justify-center gap-3">
+                {p.word}
+                <button onClick={() => speak(p.word)}
+                  className="text-xl text-[#1CB0F6] transition-transform duration-150 hover:scale-125 active:scale-95"
+                  title="Wort vorlesen">🔊</button>
+              </div>
+              <div className="text-xl text-gray-500">{p.translation}</div>
+              {p.hint && <div className="text-sm text-gray-400">💡 {p.hint}</div>}
             </div>
-            <div className="text-xl text-gray-500">{p.translation}</div>
-            {p.hint && <div className="text-sm text-gray-400">💡 {p.hint}</div>}
-          </div>
-        )}
+          )}
 
-        {item.exercise_type === "mc" && (
-          <div className="flex flex-col gap-3">
-            <div className="text-lg font-bold">{p.question}</div>
-            {(p.options as string[]).map((o, i) => (
-              <button key={i} disabled={!!feedback}
-                onClick={() => finish(i === item.solution.correct, p.options[item.solution.correct])}
-                className="px-4 py-3 rounded-2xl border-2 border-gray-200 font-bold text-left hover:bg-gray-50">
-                {o}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {item.exercise_type === "cloze" && (
-          <div className="flex flex-col gap-4">
-            <div className="text-2xl font-bold text-center">{p.sentence}</div>
-            <div className="text-sm text-gray-400 text-center">💡 {p.hint}</div>
-            <input className="border-2 border-gray-200 rounded-2xl px-4 py-3 text-lg" value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") finish(input.trim().toLowerCase() === item.solution.answer, item.solution.answer); }} />
-          </div>
-        )}
-
-        {item.exercise_type === "word_bank" && (
-          <div className="flex flex-col gap-4">
-            <div className="text-lg font-bold">Übersetze: <span className="text-[#1CB0F6]">{p.sentence}</span></div>
-            <div className="min-h-[48px] border-b-2 border-dashed border-gray-300 text-lg font-bold">
-              {tiles.map((t) => p.tiles[t]).join(" ")}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(p.tiles as string[]).map((t, i) => (
-                <button key={i} disabled={tiles.includes(i) || !!feedback} onClick={() => setTiles([...tiles, i])}
-                  className="px-4 py-2 rounded-xl border-2 border-gray-200 font-bold disabled:opacity-20">{t}</button>
+          {item.exercise_type === "mc" && (
+            <div className="flex flex-col gap-3">
+              <div className="text-lg font-bold">{p.question}</div>
+              {(p.options as string[]).map((o, i) => (
+                <button key={i} disabled={!!feedback}
+                  onClick={() => { setPicked(i); finish(i === item.solution.correct, p.options[item.solution.correct]); }}
+                  className={`px-4 py-3 rounded-2xl border-2 font-bold text-left transition-all duration-150
+                    ${feedback
+                      ? (i === item.solution.correct
+                        ? "border-[#58CC02] bg-green-50 text-[#58CC02]"
+                        : i === picked
+                          ? "border-[#FF4B4B] bg-red-50 text-[#FF4B4B] anim-shake"
+                          : "border-gray-200 text-gray-400 opacity-50")
+                      : "border-gray-200 hover:bg-gray-50 hover:border-gray-300 active:scale-[0.98]"}`}>
+                  {o}
+                </button>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        {item.exercise_type === "match" && (
-          <div className="flex flex-col gap-4">
-            <div className="text-lg font-bold">Ordne die Paare zu</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-3">
-                {(p.pairs as any[]).map((pr) => (
-                  <button key={pr.es} disabled={matchDone.includes(pr.es) || !!feedback}
-                    onClick={() => setMatchSel(pr.es)}
-                    className={`px-3 py-3 rounded-xl border-2 font-bold ${matchDone.includes(pr.es) ? "bg-green-50 border-[#58CC02] opacity-60" : matchSel === pr.es ? "border-[#1CB0F6] bg-blue-50" : "border-gray-200"}`}>
-                    {pr.es}
-                  </button>
-                ))}
+          {item.exercise_type === "cloze" && (
+            <div className={`flex flex-col gap-4 ${feedback && !feedback.ok ? "anim-shake" : ""}`}>
+              <div className="text-2xl font-bold text-center">{p.sentence}</div>
+              <div className="text-sm text-gray-400 text-center">💡 {p.hint}</div>
+              <input autoFocus className="border-2 border-gray-200 focus:border-[#1CB0F6] focus:outline-none rounded-2xl px-4 py-3 text-lg transition-colors" value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") finish(input.trim().toLowerCase() === item.solution.answer, item.solution.answer); }} />
+            </div>
+          )}
+
+          {item.exercise_type === "word_bank" && (
+            <div className="flex flex-col gap-4">
+              <div className="text-lg font-bold">Übersetze: <span className="text-[#1CB0F6]">{p.sentence}</span></div>
+              <div className="min-h-[48px] border-b-2 border-dashed border-gray-300 text-lg font-bold">
+                {tiles.map((t) => p.tiles[t]).join(" ")}
               </div>
-              <div className="flex flex-col gap-3">
-                {(p.pairs as any[]).map((pr) => (
-                  <button key={pr.de} disabled={matchDone.includes(pr.de) || !!feedback}
-                    onClick={() => {
-                      if (matchSel === pr.es) {
-                        const nd = [...matchDone, pr.es, pr.de];
-                        setMatchDone(nd); setMatchSel(null);
-                        if (nd.length >= (p.pairs as any[]).length * 2 && matchErr === 0) finish(true, "Alle Paare richtig!");
-                        else if (nd.length >= (p.pairs as any[]).length * 2) finish(false, "Mit Fehlern – Paare wiederholen!");
-                      } else { setMatchErr(matchErr + 1); setMatchSel(null); }
-                    }}
-                    className={`px-3 py-3 rounded-xl border-2 font-bold ${matchDone.includes(pr.de) ? "bg-green-50 border-[#58CC02] opacity-60" : "border-gray-200"}`}>
-                    {pr.de}
-                  </button>
+              <div className="flex flex-wrap gap-2">
+                {(p.tiles as string[]).map((t, i) => (
+                  <button key={i} disabled={tiles.includes(i) || !!feedback} onClick={() => setTiles([...tiles, i])}
+                    className={`px-4 py-2 rounded-xl border-2 font-bold transition-all duration-150
+                      ${tiles.includes(i) ? "border-gray-200 bg-gray-100 opacity-30" : "border-gray-200 hover:border-gray-300 active:scale-95"}`}>{t}</button>
                 ))}
               </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {item.exercise_type === "match" && (
+            <div className="flex flex-col gap-4">
+              <div className="text-lg font-bold">Ordne die Paare zu</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-3">
+                  {(p.pairs as any[]).map((pr) => (
+                    <button key={pr.es} disabled={matchDone.includes(pr.es) || !!feedback}
+                      onClick={() => setMatchSel(pr.es)}
+                      className={`px-3 py-3 rounded-xl border-2 font-bold transition-all duration-150
+                        ${matchDone.includes(pr.es) ? "bg-green-50 border-[#58CC02] opacity-60" : matchSel === pr.es ? "border-[#1CB0F6] bg-blue-50" : "border-gray-200 hover:border-gray-300 active:scale-95"}`}>
+                      {pr.es}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-3">
+                  {(p.pairs as any[]).map((pr) => (
+                    <button key={pr.de} disabled={matchDone.includes(pr.de) || !!feedback}
+                      onClick={() => {
+                        if (matchSel === pr.es) {
+                          const nd = [...matchDone, pr.es, pr.de];
+                          setMatchDone(nd); setMatchSel(null);
+                          if (nd.length >= (p.pairs as any[]).length * 2 && matchErr === 0) finish(true, "Alle Paare richtig!");
+                          else if (nd.length >= (p.pairs as any[]).length * 2) finish(false, "Mit Fehlern – Paare wiederholen!");
+                        } else { setMatchErr(matchErr + 1); setMatchSel(null); }
+                      }}
+                      className={`px-3 py-3 rounded-xl border-2 font-bold transition-all duration-150
+                        ${matchDone.includes(pr.de) ? "bg-green-50 border-[#58CC02] opacity-60" : "border-gray-200 hover:border-gray-300 active:scale-95"}`}>
+                      {pr.de}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {feedback && (
-        <div className={`max-w-md mx-auto px-6 pb-6 ${feedback.ok ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>
-          <div className="font-extrabold mb-1">{feedback.ok ? "¡Perfecto!" : "Richtig wäre:"}</div>
+        <div className="max-w-md mx-auto px-6 pb-6 anim-slide-up">
+          <div className={`text-3xl mb-1 ${feedback.ok ? "anim-pop" : "anim-shake"}`}>{feedback.ok ? "🎉" : "💪"}</div>
+          <div className={`font-extrabold mb-1 ${feedback.ok ? "text-[#58CC02]" : "text-[#FF4B4B]"}`}>
+            {feedback.ok ? (combo >= 5 ? "¡Increíble! Serien-Bonus läuft!" : "¡Perfecto!") : "Richtig wäre:"}
+          </div>
           <div className="text-sm text-gray-500 mb-3">{feedback.ok ? "Weiter so 🌿" : feedback.correctText}</div>
-          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]"
+          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]
+            transition-all duration-100 active:translate-y-[2px] active:border-b-0 hover:brightness-105"
             onClick={next} disabled={saving}>
-            {saving ? "Speichern …" : idx + 1 >= exercises.length ? "Abschließen" : "Weiter"}
+            {saving ? "Speichern …" : idx + 1 >= exs.length ? "Abschließen" : "Weiter"}
           </button>
         </div>
       )}
       {!feedback && (
         <div className="max-w-md mx-auto px-6 pb-6">
-          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302] disabled:opacity-40"
+          <button className="w-full bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]
+            transition-all duration-100 active:translate-y-[2px] active:border-b-0 hover:brightness-105 disabled:opacity-40 disabled:pointer-events-none"
             disabled={
               item.exercise_type === "new_word" ? false :
               item.exercise_type === "match" ? true :
