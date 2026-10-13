@@ -93,6 +93,16 @@ export default function CaminoApp() {
     return () => sub.subscription.unsubscribe();
   }, [loadAll]);
 
+  // Lernpfad automatisch zur aktuellen Lektion scrollen (wie Duolingo: aktuelle Lektion im Zentrum).
+  useEffect(() => {
+    if (view.name !== "path" || loading || units.length === 0) return;
+    const t = setTimeout(() => {
+      document.querySelector<HTMLElement>('[data-current="true"]')
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [view.name, completedLessonIds, units, loading]);
+	
   if (loading || !ready) {
     return <main className="min-h-screen flex items-center justify-center text-2xl">🌱 camino lädt …</main>;
   }
