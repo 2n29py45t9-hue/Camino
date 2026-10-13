@@ -180,14 +180,16 @@ function AuthScreen({ onDone }: { onDone: () => void }) {
 async function submit() {
   setMsg("");
   try {
-    const fn = mode === "signup" ? supabase.auth.signUp : supabase.auth.signInWithPassword;
-    const { data, error } = await fn({ email, password });
+    const { data, error } =
+      mode === "signup"
+        ? await supabase.auth.signUp({ email, password })
+        : await supabase.auth.signInWithPassword({ email, password });
     if (error) { setMsg(error.message); return; }
     if (mode === "signup" && !data.session) {
       setMsg("Konto erstellt! Prüfe dein Postfach (auch Spam) und klicke den Bestätigungslink – danach kannst du dich einloggen.");
       return;
     }
-    onDone(); // nur ausführen, wenn wirklich eine Session da ist
+    onDone(); // nur bei echter Session
   } catch (e: any) {
     setMsg("Verbindung zu Supabase fehlgeschlagen: " + (e?.message ?? String(e)));
   }
