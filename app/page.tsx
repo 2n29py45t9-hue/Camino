@@ -167,7 +167,7 @@ export default function CaminoApp() {
         <div className="max-w-md mx-auto px-4 py-3 flex items-center justify-between text-sm font-bold">
           <span className="text-orange-500">🔥 {profile?.streak_count ?? 0}</span>
           <span className="text-lg font-extrabold text-[#58CC02]">camino</span>
-          <button className="text-xl" title="Profil" onClick={() => setView({ name: "profile" })}>👤</button>
+          <span className="text-amber-500" title="XP gesamt">⚡ {profile?.total_xp ?? 0}</span>
         </div>
       </header>
 
@@ -199,6 +199,29 @@ export default function CaminoApp() {
         </div>
       </div>
     </main>
+  );
+}
+
+/* ---------------- Untere Navigation (am Display-Rand angedockt) ---------------- */
+
+function BottomNav({ active, onPath, onProfile }: { active: "path" | "profile"; onPath: () => void; onProfile: () => void }) {
+  return (
+    <nav className="fixed bottom-0 inset-x-0 z-20 bg-white border-t border-gray-200 pb-[env(safe-area-inset-bottom)]">
+      <div className="max-w-md mx-auto grid grid-cols-2">
+        <button onClick={onPath}
+          className={`flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-extrabold uppercase tracking-wider transition-colors duration-150
+            ${active === "path" ? "text-[#58CC02]" : "text-gray-400 hover:text-gray-600"}`}>
+          <span className="text-2xl leading-none">🏠</span>
+          Lernen
+        </button>
+        <button onClick={onProfile}
+          className={`flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-extrabold uppercase tracking-wider transition-colors duration-150
+            ${active === "profile" ? "text-[#58CC02]" : "text-gray-400 hover:text-gray-600"}`}>
+          <span className="text-2xl leading-none">👤</span>
+          Profil
+        </button>
+      </div>
+    </nav>
   );
 }
 
