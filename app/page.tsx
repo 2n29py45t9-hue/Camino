@@ -115,8 +115,8 @@ export default function CaminoApp() {
     );
   }
 
-  if (view.name === "mywords") {
-    return <MyWordsScreen userId={session.user.id} onBack={() => setView({ name: "profile" })} />;
+	if (view.name === "mywords") {
+	return <MyWordsScreen userId={session.user.id} onBack={() => setView({ name: "profile" })} />;
   }
 
   if (view.name === "lesson") {
