@@ -59,8 +59,16 @@ export default function CaminoApp() {
   const [units, setUnits] = useState<Unit[]>([]);
   const [completedLessonIds, setCompletedLessonIds] = useState<Set<string>>(new Set());
   const [dueCount, setDueCount] = useState(0);
-  const [view, setView] = useState<{ name: "path" } | { name: "lesson"; lesson: Lesson } | { name: "review" } | { name: "profile" } | { name: "mywords" }| { name: "placement" }>({ name: "path" });
+  const [view, setView] = useState<{ name: "path" } | { name: "lesson"; lesson: Lesson } | { name: "review" } | { name: "profile" } | { name: "mywords" } | { name: "placement" } | { name: "materiallesson"; materialId: string }>({ name: "path" });
   const [loading, setLoading] = useState(true);
+  const [pathMode, setPathMode] = useState<"camino" | "material">("camino");
+
+  // Erst lesen; nur bei einer Auswahl schreiben, damit der gespeicherte Modus
+  // beim Mounten (auch im Strict Mode) nicht mit dem Standard überschrieben wird.
+  function selectPathMode(mode: "camino" | "material") {
+    setPathMode(mode);
+    try { localStorage.setItem("camino_path_mode", mode); } catch { /* Speicher optional. */ }
+  }
 
   const loadAll = useCallback(async (uid: string) => {
     const [u, lc, p, srs] = await Promise.all([
@@ -80,6 +88,9 @@ export default function CaminoApp() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
+      try {
+        if (localStorage.getItem("camino_path_mode") === "material") setPathMode("material");
+      } catch { /* Der Pfad bleibt auch ohne verfügbaren Gerätespeicher nutzbar. */ }
       setSession(data.session);
       if (data.session?.user) loadAll(data.session.user.id);
       else setLoading(false);
@@ -95,13 +106,13 @@ export default function CaminoApp() {
 
   // Lernpfad automatisch zur aktuellen Lektion scrollen (wie Duolingo: aktuelle Lektion im Zentrum).
   useEffect(() => {
-    if (view.name !== "path" || loading || units.length === 0) return;
+    if (view.name !== "path" || pathMode !== "camino" || loading || units.length === 0) return;
     const t = setTimeout(() => {
       document.querySelector<HTMLElement>('[data-current="true"]')
         ?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 200);
     return () => clearTimeout(t);
-  }, [view.name, completedLessonIds, units, loading]);
+  }, [view.name, pathMode, completedLessonIds, units, loading]);
 	
   if (loading || !ready) {
     return <main className="min-h-screen flex items-center justify-center text-2xl">🌱 camino lädt …</main>;
@@ -134,6 +145,10 @@ export default function CaminoApp() {
 
 	if (view.name === "mywords") {
 	return <MyWordsScreen userId={session.user.id} onBack={() => setView({ name: "profile" })} />;
+  }
+
+  if (view.name === "materiallesson") {
+    return <MyWordsScreen key={view.materialId} userId={session.user.id} materialId={view.materialId} onBack={() => setView({ name: "path" })} />;
   }
 
   if (view.name === "placement") {
@@ -179,27 +194,52 @@ export default function CaminoApp() {
       </header>
 
       <div className="max-w-md mx-auto px-4 py-6 pb-24">
-        {dueCount > 0 && (
-          <button onClick={() => setView({ name: "review" })}
-            className="w-full mb-5 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 text-left">
-            <div className="font-extrabold text-amber-600">🔁 {dueCount} Wiederholung{dueCount > 1 ? "en" : ""} fällig</div>
-            <div className="text-xs text-gray-500">Camino hat geplant, was du jetzt auffrischen solltest.</div>
+        <div role="group" aria-label="Lernpfad auswählen" className="flex bg-white border-2 border-gray-200 rounded-2xl p-1 mb-5 gap-1">
+          <button onClick={() => selectPathMode("camino")} aria-pressed={pathMode === "camino"}
+            className={`flex-1 rounded-xl py-2 font-extrabold text-sm transition-all duration-150
+              ${pathMode === "camino" ? "bg-[#58CC02] text-white shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            🌿 Camino-Pfad
           </button>
+          <button onClick={() => selectPathMode("material")} aria-pressed={pathMode === "material"}
+            className={`flex-1 rounded-xl py-2 font-extrabold text-sm transition-all duration-150
+              ${pathMode === "material" ? "bg-[#1CB0F6] text-white shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            📚 Mein Material
+          </button>
+        </div>
+
+        {pathMode === "camino" && (
+          <>
+            {dueCount > 0 && (
+              <button onClick={() => setView({ name: "review" })}
+                className="w-full mb-5 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 text-left">
+                <div className="font-extrabold text-amber-600">🔁 {dueCount} Wiederholung{dueCount > 1 ? "en" : ""} fällig</div>
+                <div className="text-xs text-gray-500">Camino hat geplant, was du jetzt auffrischen solltest.</div>
+              </button>
+            )}
+
+            <button onClick={() => setView({ name: "placement" })}
+              className="w-full mb-5 bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 text-left">
+              <div className="font-extrabold text-[#1CB0F6]">🧭 Einstufungstest</div>
+              <div className="text-xs text-gray-500">
+                Schon Spanisch-Vorkenntnisse? Überspringe Anfänger-Units und starte an deinem Niveau.
+              </div>
+            </button>
+
+            <PathView
+              units={units}
+              completed={completedLessonIds}
+              onStart={(lesson) => setView({ name: "lesson", lesson })}
+            />
+          </>
         )}
 
-        <button onClick={() => setView({ name: "placement" })}
-          className="w-full mb-5 bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 text-left">
-          <div className="font-extrabold text-[#1CB0F6]">🧭 Einstufungstest</div>
-          <div className="text-xs text-gray-500">
-            Schon Spanisch-Vorkenntnisse? Überspringe Anfänger-Units und starte an deinem Niveau.
-          </div>
-        </button>
-
-        <PathView
-          units={units}
-          completed={completedLessonIds}
-          onStart={(lesson) => setView({ name: "lesson", lesson })}
-        />
+        {pathMode === "material" && (
+          <MaterialPathView
+            userId={session.user.id}
+            onStartMaterial={(materialId) => setView({ name: "materiallesson", materialId })}
+            onUpload={() => setView({ name: "profile" })}
+          />
+        )}
 
         <div className="mt-6 text-center text-xs text-gray-400">
           ⚡ {profile?.total_xp ?? 0} XP · Serien-Tag {profile?.streak_last_active ?? "–"}
@@ -365,6 +405,126 @@ function PathView({ units, completed, onStart }: { units: Unit[]; completed: Set
                   </div>
                 );
               })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------- Material-Pfad (eigenes Material als Lernpfad) ---------------- */
+
+function MaterialPathView({ userId, onStartMaterial, onUpload }: {
+  userId: string; onStartMaterial: (materialId: string) => void; onUpload: () => void;
+}) {
+  const [mats, setMats] = useState<{ id: string; title: string; created_at: string; user_words: { reps: number }[] }[] | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    supabase.from("user_materials").select("id, title, created_at, user_words(reps)")
+      .eq("profile_id", userId).order("created_at")
+      .then(({ data, error }) => {
+        if (!active) return;
+        setError(Boolean(error));
+        setMats(data ?? []);
+      });
+    return () => { active = false; };
+  }, [userId]);
+
+  // Der Material-Pfad lädt asynchron und zentriert seinen eigenen aktuellen Knoten.
+  useEffect(() => {
+    if (!mats) return;
+    const t = setTimeout(() => {
+      document.querySelector<HTMLElement>('[data-current="true"]')
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [mats]);
+
+  if (!mats) return <div className="text-center text-sm text-gray-400 py-10">Material wird geladen …</div>;
+  if (error) return <div role="alert" className="text-center text-sm text-red-500 py-10">Material konnte nicht geladen werden. Bitte versuche es erneut.</div>;
+
+  if (mats.length === 0) {
+    return (
+      <div className="flex flex-col items-center text-center gap-4 py-10">
+        <div className="text-6xl">📚</div>
+        <p className="text-sm text-gray-500 max-w-xs">
+          Noch kein eigenes Material. Lade im Profil Vokabellisten oder Texte hoch – Camino baut daraus deinen eigenen Lernpfad.
+        </p>
+        <button className="bg-[#1CB0F6] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#1899D6]
+          transition-all duration-100 active:translate-y-[2px] active:border-b-0" onClick={onUpload}>
+          Material hochladen
+        </button>
+      </div>
+    );
+  }
+
+  // Leere Materialien dürfen die nächste spielbare Unit nicht blockieren.
+  const nextId = mats.find((m) => m.user_words?.some((w) => w.reps === 0))?.id;
+
+  return (
+    <div className="flex flex-col gap-8">
+      {mats.map((m) => {
+        const words = m.user_words ?? [];
+        const total = words.length;
+        const learned = words.filter((w) => w.reps > 0).length;
+        const done = total > 0 && learned === total;
+        const isNext = m.id === nextId;
+        const pct = total > 0 ? Math.round((learned / total) * 100) : 0;
+        const date = new Date(m.created_at).toLocaleDateString("de-DE", { day: "2-digit", month: "short", year: "numeric" });
+        return (
+          <div key={m.id}>
+            <div className={`rounded-2xl p-4 mb-6 ${total > 0 ? "bg-[#1CB0F6]" : "bg-gray-300"}`}>
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">📄</span>
+                <div className="text-white flex-1 min-w-0">
+                  <div className="font-extrabold truncate">{m.title}</div>
+                  <div className="text-xs opacity-80">{total} Wort{total !== 1 ? "e" : ""} · {date}</div>
+                </div>
+                {done && <span className="text-white text-xl">✓</span>}
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <div role="progressbar" aria-label={`Lernfortschritt: ${m.title}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+                  className="flex-1 h-3 rounded-full bg-black/20 overflow-hidden">
+                  <div className="h-full rounded-full bg-white transition-all duration-500" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="text-[11px] font-extrabold text-white whitespace-nowrap">{learned}/{total}</span>
+              </div>
+            </div>
+
+            <div className="relative flex flex-col items-center">
+              <div className={`absolute left-1/2 top-4 bottom-8 -translate-x-1/2 w-1.5 rounded-full ${total > 0 ? "bg-[#1CB0F6]" : "bg-gray-200"}`} />
+              <div className="flex flex-col items-center w-full">
+                <div className="py-4">
+                  <div className="relative">
+                    {isNext && (
+                      <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 z-20">
+                        <div className="anim-float">
+                          <div className="relative bg-white border-2 border-[#1CB0F6] rounded-2xl px-4 py-1.5 shadow-sm whitespace-nowrap">
+                            <span className="font-extrabold text-[#1CB0F6] text-sm">EMPEZAR</span>
+                            <span className="absolute right-full top-1/2 -translate-y-1/2 border-y-[7px] border-y-transparent border-r-[8px] border-r-[#1CB0F6]" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      aria-label={`Práctica: ${m.title}`}
+                      data-current={isNext ? "true" : undefined}
+                      disabled={total === 0}
+                      onClick={() => onStartMaterial(m.id)}
+                      className={`relative z-10 w-16 h-16 rounded-full text-2xl flex items-center justify-center border-b-4 transition-all duration-150
+                        ${total === 0 ? "bg-[#E5E5E5] border-[#C9C9C9] text-gray-400" : "bg-[#1CB0F6] border-[#1899D6] text-white"}
+                        ${total > 0 ? "hover:brightness-105 active:translate-y-[2px] active:border-b-2" : ""}`}>
+                      {total === 0 ? "🚧" : done ? "✓" : "📝"}
+                    </button>
+                  </div>
+                </div>
+                <div className={`text-[10px] font-bold mb-4 text-center bg-white px-2 rounded ${total > 0 ? "text-gray-600" : "text-gray-400"}`}>
+                  {total === 0 ? "Keine Karten erkannt" : done ? "Gelernt ✓" : "Práctica"}
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -1277,17 +1437,24 @@ function ProfileScreen({ profile, userId, onBack, onPracticeWords }: { profile: 
 
 /* ---------------- Meine Wörter (aus eigenem Material, FSRS-artig) ---------------- */
 
-function MyWordsScreen({ userId, onBack }: { userId: string; onBack: () => void }) {
+function MyWordsScreen({ userId, onBack, materialId }: { userId: string; onBack: () => void; materialId?: string }) {
   const [cards, setCards] = useState<{ id: string; es: string; de: string; reps: number }[] | null>(null);
   const [idx, setIdx] = useState(0);
   const [answered, setAnswered] = useState<null | boolean>(null);
 
   useEffect(() => {
-    supabase.from("user_words").select("id, es, de, reps")
-      .eq("profile_id", userId).lte("due_at", new Date().toISOString())
-      .order("due_at").limit(15)
-      .then(({ data }) => setCards((data as any[]) ?? []));
-  }, [userId]);
+    let active = true;
+    const query = supabase.from("user_words").select("id, es, de, reps").eq("profile_id", userId);
+    // Ungelernte Wörter zuerst, danach Erstellungsreihenfolge: Auch Materialien
+    // mit mehr als 15 Wörtern lassen sich so in mehreren Runden abschließen.
+    const round = materialId
+      ? query.eq("material_id", materialId).order("reps").order("created_at").order("id")
+      : query.lte("due_at", new Date().toISOString()).order("due_at");
+    round.limit(15).then(({ data }) => {
+      if (active) setCards(data ?? []);
+    });
+    return () => { active = false; };
+  }, [userId, materialId]);
 
   if (!cards) return <main className="min-h-screen flex items-center justify-center">Wörter laden …</main>;
 
@@ -1296,7 +1463,7 @@ function MyWordsScreen({ userId, onBack }: { userId: string; onBack: () => void 
       <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 text-center px-8">
         <div className="text-6xl">🌱</div>
         <p className="text-sm text-gray-500">
-          Gerade ist keines deiner eigenen Wörter dran. Camino plant sie genau dann wieder ein, wenn du sie brauchst.
+          {materialId ? "In diesem Material wurden keine Wörter erkannt." : "Gerade ist keines deiner eigenen Wörter dran. Camino plant sie genau dann wieder ein, wenn du sie brauchst."}
         </p>
         <button className="text-[#1CB0F6] font-bold" onClick={onBack}>Zurück</button>
       </main>
@@ -1307,9 +1474,9 @@ function MyWordsScreen({ userId, onBack }: { userId: string; onBack: () => void 
     return (
       <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 text-center px-8">
         <div className="text-6xl">🧠</div>
-        <p className="text-sm text-gray-500">Alle eigenen Wörter aufgefrischt. ¡Muy bien!</p>
+        <p className="text-sm text-gray-500">{materialId ? "Material-Runde abgeschlossen. ¡Muy bien!" : "Alle eigenen Wörter aufgefrischt. ¡Muy bien!"}</p>
         <button className="bg-[#58CC02] text-white font-extrabold rounded-2xl px-6 py-3 border-b-4 border-[#46A302]" onClick={onBack}>
-          Zurück zum Profil
+          {materialId ? "Zum Lernpfad" : "Zurück zum Profil"}
         </button>
       </main>
     );
@@ -1334,7 +1501,7 @@ function MyWordsScreen({ userId, onBack }: { userId: string; onBack: () => void 
       <div className="max-w-md mx-auto px-6 py-10 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <button className="text-xl text-gray-400" onClick={onBack}>←</button>
-          <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">Meine Wörter · {idx + 1}/{cards.length}</div>
+          <div className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">{materialId ? "Mein Material" : "Meine Wörter"} · {idx + 1}/{cards.length}</div>
           <span className="w-5" />
         </div>
         <div className="text-sm text-gray-400">Was bedeutet …</div>
